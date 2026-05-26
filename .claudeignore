@@ -1,0 +1,44 @@
+# 依赖与构建产物
+node_modules/
+.venv/
+venv/
+dist/
+build/
+.next/
+.turbo/
+
+# 锁文件
+*.lock
+*.lockb
+
+# 压缩/编译文件
+*.min.js
+*.min.css
+
+# 测试覆盖
+coverage/
+
+# 静态资源（不参与代码分析）
+public/assets/
+*.png
+*.jpg
+*.gif
+*.svg
+*.ico
+*.woff
+*.woff2
+
+# 自动生成
+generated/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# 环境
+.env
+.env.*
+!.env.example

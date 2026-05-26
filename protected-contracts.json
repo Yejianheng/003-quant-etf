@@ -1,0 +1,9 @@
+{
+  "_说明": "内容级保护清单 — Hook PostToolUse 读取。values = 已确认的常量不许改；patterns = 禁止出现的写法。",
+  "values": [
+    {"file": "[文件路径]", "key": "[常量名]", "value": "[值]", "reason": "[原因]"}
+  ],
+  "patterns": [
+    {"pattern": "[正则表达式]", "reason": "[原因]"}
+  ]
+}

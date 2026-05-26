@@ -1,0 +1,16 @@
+{
+  "_说明": "@claude-override-approved 架构防火墙保护区清单 — Hook PreToolUse 唯一事实源。新增文件只改此 JSON，4-firewall.md 自动同步引用。",
+  "_自保护": "protected-files.json、protected-contracts.json、check_values.py 自身也在保护区内，防止攻击者先改清单再改核心文件。",
+  "_Bash保护": "pre_bash.js 硬保护 .claude/hooks/ 和 .claude/.gate/ 目录，Bash 不可写/删。",
+  "protected_files": [
+    "src/config.py",
+    "protected-files.json",
+    "protected-contracts.json",
+    "check_values.py"
+  ],
+  "protected_dirs": [
+    "prompts/",
+    ".claude/rules/",
+    ".claude/hooks/"
+  ]
+}

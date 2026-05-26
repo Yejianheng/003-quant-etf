@@ -1,0 +1,12 @@
+# [2026-05-26] 新增：Python 项目标准忽略规则
+__pycache__/
+.venv/
+.env
+*.pyc
+.pytest_cache/
+.eggs/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
