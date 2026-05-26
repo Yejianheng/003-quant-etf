@@ -1,67 +1,83 @@
 # 执行指令
 
-> 顾问写入。执行者只读、执行、写 outcome.md。
+> 顾问写入。执行者只读、执行、写 outcome.md。每步完成后顾问审核提交后方可进行下一步。
 
-## 任务
+## 总体规划（10 步）
 
-项目初始化：搭建 003-quant-etf 基础文件骨架，初始化 git 仓库，准备好回测开发环境。不涉及任何业务逻辑代码。
+```
+Step 1  数据管线      AKShare → Parquet
+Step 2  趋势强度      年化收益率 / 年化波动率
+Step 3  截面动量      20+60 日 z-score 合成排名
+Step 4  目标波动率    EWMA 协方差矩阵 + 容忍带
+Step 5  相关性熔断    股债 60 日相关性 5 日 SMA
+Step 6  回撤硬止损    8/12/18 三层
+Step 7  信号生成器    编排 Step 2-6
+Step 8  组合管理器    仓位计算 + 资金路由
+Step 9  Recorder      日志记录 + 基准计算
+Step 10 回测主循环    日循环 + 参数扫描入口
+```
 
-## 涉及文件
+## 当前步骤：Step 1 — 数据管线
 
-### 新建文件
+### 任务
 
-- `.gitignore` — Python 项目标准忽略规则（__pycache__/、.venv/、.env、*.pyc、.pytest_cache/）
-- `.env.example` — 环境变量模板，含 `DASHSCOPE_API_KEY=` 和 `AKSHARE_DATA_DIR=./data`
-- `requirements.txt` — 依赖清单：`akshare>=1.14.0`、`pandas>=2.0.0`、`numpy>=1.24.0`、`scipy>=1.10.0`（协方差矩阵）、`dashscope>=1.20.0`（审计模型），版本号不锁死
-- `src/__init__.py` — 空文件
-- `src/config.py` — 配置入口，读取环境变量。内容：
-  ```python
-  """
-  模块归属：业务层 / 配置入口
-  职责：读取环境变量，提供全局配置常量
-  用法：from src.config import DASHSCOPE_API_KEY, DATA_DIR
-  """
-  import os
+从 AKShare 拉取 ETF 历史日线数据，存储为 Parquet 文件。覆盖防御层全部标的（沪深300/创业板/纳指/黄金/国债ETF）的 ETF 行情。
 
-  DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-  DATA_DIR = os.getenv("AKSHARE_DATA_DIR", "./data")
-  ```
-- `tests/__init__.py` — 空文件
-- `tests/test_config.py` — 验证 config.py 正确读取环境变量。测试场景：
-  - 环境变量已设置 → DASHSCOPE_API_KEY 非空
-  - 环境变量未设置 → 返回空字符串
-  - DATA_DIR 默认值为 "./data"
-- `prompts/` 目录 — 创建空目录，放 `.gitkeep`
-- `data/` 目录 — 创建空目录，放 `.gitkeep`
-- `项目日志/` 目录 — 已存在，无需操作
+### 测试（先写，必须红灯）
 
-### 修改文件
+`tests/test_data_pipeline.py` — 3 个场景：
 
-- `.claude/next-session.md` — 更新为：
-  - 当前阶段：回测开发
-  - 已决策：方向性讨论.md 架构冻结，所有参数和决策见该文件
-  - 待处理：搭建回测引擎、实现趋势强度计算、实现截面动量计算、实现目标波动率模块、实现完整回测管线
-  - 最后状态：2026-05-26 方向性讨论完成，架构冻结，准备进入回测开发阶段
+1. **正常拉取**：调用 fetch_etf_daily("510300", "2024-01-01", "2024-12-31")，返回非空 DataFrame，含列 open/high/low/close/volume，index 为日期
+2. **空参数处理**：起止日期为周末/节假日时，不抛异常，返回空 DataFrame
+3. **存储读取往返**：DataFrame 写入 Parquet → 读回 → 与原 DataFrame 完全一致（列、值、行数）
 
-- `protected-files.json` — 新增保护区条目：
-  - `protected_files` 新增：`src/config.py`
-  - 说明：config.py 是配置唯一入口，禁止绕过直接硬编码 API Key
+### 代码（测试红灯后再写）
 
-## 约束
+`src/data_pipeline.py` — 两个函数：
 
-- 不写任何业务逻辑代码（趋势强度、动量计算、回测引擎等均为下一步）
-- 不新增功能，纯基础设施搭建
-- 保护区文件（protected-files.json）修改需走 audit 流程
+```python
+fetch_etf_daily(code, start_date, end_date)
+"""
+从 AKShare 拉取单只 ETF 日线，返回 pandas DataFrame。
+code: ETF 代码，如 "510300"（沪深300ETF）
+"""
+  → 调 akshare.fund_etf_hist_em(symbol=code, start_date=..., end_date=..., adjust="qfq")
+  → 保留列：日期(设为index)、开盘、最高、最低、收盘、成交量
+  → 英文列名：date/open/high/low/close/volume
 
-## 验收标准
+save_to_parquet(df, path)
+load_from_parquet(path) → DataFrame
+"""
+Parquet 读写，保留 index。
+"""
+```
 
-- [ ] `git status` — 显示新文件已 staged，工作区干净
-- [ ] `python -c "from src.config import DASHSCOPE_API_KEY, DATA_DIR; print('OK')"` — 输出 OK
-- [ ] `python -m pytest tests/test_config.py -v` — 全部通过
-- [ ] `ls src/ tests/ prompts/ data/ 项目日志/` — 五个目录均存在
-- [ ] `ls requirements.txt .env.example .gitignore` — 三个文件均存在
+对照表文件 `src/etf_universe.py` — ETF 代码映射：
+
+```python
+# 防御层标的 → ETF 代码（上交所）
+ETF_UNIVERSE = {
+    "沪深300": "510300",
+    "创业板": "159915",
+    "纳指": "513100",
+    "黄金": "518880",
+    "国债ETF": "511010",
+}
+```
+
+### 约束
+
+- 不写趋势强度、动量、回测等任何后续模块代码
+- AKShare 首次调用可能较慢，测试需设合理超时（60s）
+- Parquet 写入 `data/` 目录
+
+### 验收标准
+
+- [ ] `python -m pytest tests/test_data_pipeline.py -v` — 3/3 绿
+- [ ] `python -c "from src.data_pipeline import fetch_etf_daily; df=fetch_etf_daily('510300','2024-01-01','2024-01-31'); print(df.shape)"` — 无报错
 
 ---
 
-> 执行完成后，写 outcome.md 并提示人开顾问窗口审查。
-> 涉及保护区文件时，执行者必须跑 CLI validate → CLI audit，结果写入 outcome.md。
+> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 1"。
+> 顾问审核通过并 commit 后，更新本文 Step 2。
+> 禁止跳过步骤，禁止一次完成多步。
