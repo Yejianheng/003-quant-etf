@@ -4,6 +4,7 @@
   "_Bash保护": "pre_bash.js 硬保护 .claude/hooks/ 和 .claude/.gate/ 目录，Bash 不可写/删。",
   "protected_files": [
     "src/config.py",
+    ".claude/settings.json",
     "protected-files.json",
     "protected-contracts.json",
     "check_values.py"
