@@ -13,115 +13,147 @@ Step 5  相关性熔断    股债 60 日相关性 5 日 SMA            ✅ 已�
 Step 6  回撤硬止损    8/12/18 三层                        ✅ 已完成
 Step 7  信号生成器    编排 Step 2-6                        ✅ 已完成
 Step 8  组合管理器    仓位计算 + 资金路由                  ✅ 已完成
-Step 9  Recorder      日志记录 + 基准计算                  ← 当前
-Step 10 回测主循环    日循环 + 参数扫描入口
+Step 9  Recorder      日志记录 + 基准计算                  ✅ 已完成
+Step 10 回测主循环    日循环 + 参数扫描入口                ← 当前
 ```
 
-## 当前步骤：Step 9 — Recorder
+## 当前步骤：Step 10 — 回测主循环
 
 ### 背景
 
-Recorder 是回测的"黑匣子"——记录每一天的组合状态和信号，同时计算基准收益用于最终对比。这是回测报告中所有数字的来源。
+回测主循环是系统的运行时引擎。每天推进一次：拉取当日数据 → 生成信号 → 分配仓位 → 计算当日收益 → 记录状态。循环结束后输出完整的回测报告。
 
 ```
-基准：沪深300 + 创业板 + 纳指 + 黄金 + 国债 ETF
-      按防御层参考权重（25/10/15/10/40）月度机械再平衡
-      逆回购不在基准内
+初始资金 1,000,000
+    │
+    ▼  (每日循环)
+┌─────────────────────────────────┐
+│ 1. 截取当日可见数据 ([:today])  │
+│ 2. generate_signal()            │
+│ 3. allocate_capital()           │
+│ 4. 计算当日组合收益              │
+│ 5. record_daily()               │
+└─────────────────────────────────┘
+    │
+    ▼
+回测报告: NAV 曲线 + 基准对比 + 绩效指标
 ```
 
 ### 任务
 
-#### 9a. 日记录 `src/recorder.py`
+`src/backtest_engine.py` — 两个函数：
 
 ```python
-init_recorder() -> dict
+run_backtest(
+    prices: dict[str, pd.DataFrame],
+    initial_capital: float = 1_000_000,
+    params: dict | None = None,
+    min_days: int = 120,
+) -> dict
 """
-初始化空记录器。
-返回: {"records": []}
-"""
+运行完整回测。
 
-record_daily(
-    recorder: dict,
-    date: str,
-    nav: float,
-    signal: dict,
-    positions: dict[str, float],
-) -> None
-"""
-追加一条日记录到 recorder["records"]。
-记录字段: date, nav, exposure, repo_amount, final_multiplier,
-          circuit_breaker_triggered, drawdown_level, drawdown,
-          n_positions, position_names, defense_active, offense_top
-不返回值，直接修改 recorder（in-place）。
-"""
+prices: {标的名: OHLCV DataFrame}，所有 DataFrame 需对齐到同一日期范围。
+initial_capital: 初始资金。
+params: 传给 generate_signal 的参数。
+min_days: 最少需要的数据天数（trend_window + corr_window + sma_window 缓冲）。
 
-get_records_df(recorder: dict) -> "pd.DataFrame"
-"""
-将 records 列表转为 DataFrame，date 列设为 DatetimeIndex。
-"""
-```
-
-#### 9b. 基准计算 `src/benchmark.py`
-
-```python
-BENCHMARK_WEIGHTS = {
-    "沪深300": 0.25,
-    "创业板": 0.10,
-    "纳指": 0.15,
-    "黄金": 0.10,
-    "国债ETF": 0.40,
+返回: {
+    "records_df": pd.DataFrame,      # get_records_df 输出
+    "benchmark_nav": pd.Series,      # 基准净值
+    "final_nav": float,              # 最终净值
+    "final_benchmark_nav": float,    # 基准最终净值
+    "total_return": float,           # 策略总收益率
+    "benchmark_return": float,       # 基准总收益率
+    "annual_return": float,          # 策略年化收益率
+    "annual_volatility": float,      # 策略年化波动率
+    "sharpe_ratio": float,           # 夏普比率
+    "max_drawdown": float,           # 最大回撤（负小数）
+    "calmar_ratio": float,           # 卡玛比率
 }
 
-compute_benchmark(
-    prices: dict[str, pd.DataFrame],
-    weights: dict[str, float] | None = None,
-) -> pd.Series
-"""
-计算基准组合净值曲线。
-prices: 同 signal_generator 的 prices 格式。
-weights: 基准权重，默认 BENCHMARK_WEIGHTS。
-返回: 基准净值 Series，index=日期 DatetimeIndex，起始值=1.0。
+日循环逻辑：
+1. 确定日期范围：prices 中所有标的日期 index 的交集
+2. 初始状态：nav = initial_capital, cash = initial_capital（全现金起步）
+3. 建立持仓跟踪：positions = {}  # {name: shares}
+4. for each t in range(min_days, len(dates)):
+     today = dates[t]
+     visible_prices = {name: df.loc[:today] for name, df in prices.items()}
 
-计算逻辑：
-1. 提取每只基准标的 close 列
-2. 计算日对数收益率 = ln(P_t/P_{t-1})
-3. 篮子日收益率 = Σ(weight_i × return_i)
-4. 累积：基准净值 = exp(cumsum(篮子日收益率))
-5. 不做月度再平衡模拟（简化处理，用买入持有近似）
-   → 注释说明：月度再平衡的摩擦成本约 2-4bp/月，对长期回测结果影响 <0.5%
+     # 生成信号 + 分配资金
+     signal = generate_signal(visible_prices, nav_series[:t+1], params)
+     alloc = allocate_capital(signal, nav)
+
+     # 执行调仓（简化：按目标金额直接调整，忽略滑点/手续费）
+     target_positions = alloc["positions"]  # {name: dollar_amount}
+     for name, target_dollar in target_positions.items():
+         price = prices[name].loc[today, "close"]
+         positions[name] = target_dollar / price  # 转为股数
+
+     # 计算当日组合价值
+     nav = sum(positions[name] * prices[name].loc[today, "close"]
+               for name in positions)
+     nav += alloc["repo_amount"]  # 逆回购现金（不产生日收益，简化处理）
+
+     # 构建 nav_series（用于下次 signal 的 drawdown 计算）
+     nav_series[t] = nav
+
+     # 记录
+     record_daily(recorder, str(today.date()), nav, signal, alloc["positions"])
+
+5. 循环结束后计算绩效指标
+6. 计算基准净值（同日期范围）
+7. 返回结果
+```
+
+```python
+parameter_scan(
+    prices: dict[str, pd.DataFrame],
+    param_grid: dict[str, list],
+    initial_capital: float = 1_000_000,
+) -> list[dict]
+"""
+参数扫描入口。
+param_grid: {"trend_window": [40, 60, 80], "target_vol_beta": [0.08, 0.10, 0.12], ...}
+
+对每个参数组合调用 run_backtest(prices, initial_capital, params=combo)，
+返回按 Sharpe 降序排列的结果列表。
+
+每个元素 = {**params_combo, **run_backtest 返回的绩效指标}。
 """
 ```
+
+### 关键简化（本步明确接受）
+
+- **滑点/手续费**：不模拟。在 Step 10 阶段先验证逻辑正确性，交易成本留到模拟实盘阶段（方向性讨论 阶段 6）再引入。
+- **逆回购收益**：repo 现金不产生日收益（GC001 年化 ~2%，每日 ~0.005%，对回测影响可忽略）。
+- **整数股数**：使用浮点股数。A 股 ETF 最小交易单位 100 份，取整留到模拟实盘阶段。
+- **调仓执行**：每次调仓按当日收盘价直接成交，无延迟。
 
 ### 测试（先写，必须红灯）
 
-`tests/test_recorder.py` — 3 个场景：
+`tests/test_backtest_engine.py` — 3 个场景：
 
-1. **初始化和记录**：init → record 3 天 → get_records_df。验证行数=3，列含 nav/exposure/repo_amount/drawdown_level。
+1. **全绿场景回测**：构造 5 只防御标的全部单边上涨、股债负相关的 200 天合成数据。运行 run_backtest。验证 final_nav > 1.0，records_df 行数 = 200 - min_days，max_drawdown > -0.05（牛市无大幅回撤）。
 
-2. **字段正确性**：record 一条 → 验证 date/nav/positions 写入正确。
+2. **下跌市回撤止损**：构造先涨后暴跌的场景（峰值后回撤 25%）。验证回测过程中 drawdown_stop 至少触发过 "halve" 或 "liquidate"，max_drawdown 不超过某个可控范围。
 
-3. **空 recorder 转 DataFrame**：init → 直接 get_records_df。验证返回空 DataFrame（非报错）。
-
-`tests/test_benchmark.py` — 2 个场景：
-
-1. **基准净值计算**：构造 5 只基准标的各 60 天价格（全部单边上涨，日收益率≈0.001）。验证基准净值 ≈ exp(0.001×60) ≈ 1.062，且净值单调递增。
-
-2. **权重自定义**：传入等权 weights={k: 0.2 for k in ...}。验证结果与默认权重结果不同。
+3. **参数扫描**：构造 2×1 参数网格（如 trend_window=[60, 80]）。验证 parameter_scan 返回 2 条结果，各有不同参数，按 Sharpe 降序。
 
 ### 约束
 
-- recorder 用 list-of-dicts 结构，不做文件 I/O（Step 10 回测主循环负责写文件）
-- benchmark 不做月度再平衡模拟，用买入持有近似
-- `get_records_df` 返回的 DataFrame 中 date 设为 index（DatetimeIndex）
+- 回测引擎是最后的模块，它依赖 Step 1-9 全部模块，但不修改任何已有代码
+- `nav_series` 从初始资金 1.0 开始逐日构建，用于 drawdown 计算
+- `parameter_scan` 中每个参数组合独立运行，互不干扰
+- 日期对齐使用 pandas index.intersection
 
 ### 验收标准
 
-- [ ] `python -m pytest tests/test_recorder.py tests/test_benchmark.py -v` — 5/5 绿
-- [ ] `python -m pytest tests/test_signal_generator.py tests/test_portfolio_manager.py -v` — 旧测试不红
-- [ ] `python -c "from src.recorder import init_recorder, record_daily; from src.benchmark import compute_benchmark; print('OK')"` — 无报错
+- [ ] `python -m pytest tests/test_backtest_engine.py -v` — 3/3 绿
+- [ ] `python -m pytest tests/ -v` — 全部不红（AKShare 相关 skip 除外）
+- [ ] `python -c "from src.backtest_engine import run_backtest, parameter_scan; print('OK')"` — 无报错
 
 ---
 
-> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 9"。
-> 顾问审核通过并 commit 后，更新本文 Step 10。
-> 禁止跳过步骤，禁止一次完成多步。
+> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 10"。
+> 至此 10 步回测开发计划全部完成。
