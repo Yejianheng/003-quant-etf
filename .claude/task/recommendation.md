@@ -10,18 +10,15 @@
 
 ### 逻辑正确性
 
-- `stock_basket_returns`：逐 ETF 算对数收益率 → DataFrame → `mean(axis=1, skipna=True)`。某 ETF 缺数据用其余均值，正确。
-- `rolling_correlation`：pandas `.rolling(window).corr()` 一行，干净。
-- `correlation_circuit_breaker`：
-  - 日期对齐 `intersection`：主动处理中美交易日不同（沪深300/纳指日历交叉），设计细心。
-  - 数据不足 `< corr_window + sma_window` → 返回默认值，正确。
-  - `smoothed_corr > threshold`（默认 0.0），与方向性讨论一致。
-  - 额外返回 `raw_corr` 用于调试，不违反 spec。
+- `compute_drawdown`：`expanding().max()` 跑滚动峰值 → `(value - peak) / peak`。一行核心逻辑，正确。
+- `drawdown_stop`：`abs(drawdown)` 四级 if-else，阈值 0.08/0.12/0.18，multiplier 1.0/1.0/0.5/0.0。与方向性讨论完全一致。
+- 场景 3（先新高后回撤）验证了 running_max 跟随新高的关键行为——回撤基于 150 而非 100。
+- 场景 4（回撤恢复）验证了反弹不降 running_max——不因价格回升而错误"复仓"。
 
 ### 副作用评估
 
 - 新建文件，未修改现有模块。零副作用。
-- 测试全合成数据，无外部依赖。正/负相关场景通过共享/反向噪声构造，设计聪明。
+- 全模块 35 行，无依赖（仅 pandas），零冗余。
 
 ### 安全合规
 
@@ -34,7 +31,7 @@
 
 ## 下一步
 
-放行 → commit Step 5 → 更新 direction.md 写入 Step 6（回撤硬止损）。
+放行 → commit Step 6 → 更新 direction.md 写入 Step 7（信号生成器）。
 
 ---
 
