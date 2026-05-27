@@ -1,6 +1,6 @@
-# Step 7 执行结果 — 信号生成器
+# Step 8 执行结果 — 组合管理器
 
-**步骤**：Step 7 — 信号生成器（编排 Step 2-6）
+**步骤**：Step 8 — 组合管理器（仓位计算 + 资金路由）
 
 **日期**：2026-05-27
 
@@ -8,35 +8,31 @@
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `src/signal_generator.py` | 新增 | 信号生成器编排层，回测/实盘共用入口 |
-| `tests/test_signal_generator.py` | 新增 | 信号生成器测试 — 4 场景 |
+| `src/portfolio_manager.py` | 新增 | `allocate_capital()` — 信号→仓位转换，资金路由 |
+| `tests/test_portfolio_manager.py` | 新增 | 组合管理器测试 — 5 场景 |
 
 ## 测试结果
 
 ```
-tests/test_signal_generator.py              — 4 passed ✅ （新）
-tests/test_trend_strength.py                — 5 passed + 1 skipped ✅ （旧，零回归）
-tests/test_cross_sectional_momentum.py      — 7 passed ✅ （旧，零回归）
-tests/test_target_volatility.py             — 11 passed ✅ （旧，零回归）
-tests/test_correlation_circuit_breaker.py   — 8 passed ✅ （旧，零回归）
-tests/test_drawdown_stop.py                 — 5 passed ✅ （旧，零回归）
+tests/test_portfolio_manager.py  — 5 passed ✅ （新）
+tests/test_signal_generator.py   — 4 passed ✅ （旧，零回归）
 ```
 
-红灯确认：首跑 `ModuleNotFoundError: No module named 'src.signal_generator'`，实现后 4/4 全绿。
+红灯确认：首跑 `ModuleNotFoundError: No module named 'src.portfolio_manager'`，实现后 5/5 全绿。
 
 ## 验收标准
 
-- [x] `python -m pytest tests/test_signal_generator.py -v` — 4/4 绿
-- [x] `python -m pytest tests/test_trend_strength.py tests/test_cross_sectional_momentum.py tests/test_target_volatility.py tests/test_correlation_circuit_breaker.py tests/test_drawdown_stop.py -v` — 旧测试不红（36 passed, 1 skipped）
-- [x] `python -c "from src.signal_generator import generate_signal; print('OK')"` — 无报错
+- [x] `python -m pytest tests/test_portfolio_manager.py -v` — 5/5 绿
+- [x] `python -m pytest tests/test_signal_generator.py -v` — 旧测试不红（4 passed）
+- [x] `python -c "from src.portfolio_manager import allocate_capital; print('OK')"` — 无报错
 
 ## 实现概要
 
-- `generate_signal(prices, portfolio_value, params)` — 纯编排，不实现算法
-- 7 步管线：close 提取 → 趋势强度 → 目标波动率 → 截面动量 → 相关性熔断 → 回撤止损 → execution 汇总
-- 防御层参考权重暂用等权；进攻层无候选时返回空结构
-- 熔断触发时 final_multiplier=0 + funds_to_repo=True（覆盖一切）
-- 默认参数与方向性讨论一致
+- `allocate_capital(signal, total_capital, defense_ratio=0.70)` — 纯函数，无副作用
+- 6 步管线：基础资金池 → 回撤止损覆盖 → 熔断全进逆回购 → 防御层分配 → 进攻层分配（空仓不回流）→ 汇总
+- 进攻层空仓时 offense_pool 进逆回购，不回流防御层（Beta 70% / Alpha 30% 风险预算不可污染）
+- 权重归一化由 signal_generator 保证，本层不做内部归一化
+- 浮点数计算，不处理整数股数
 
 ## 未触及保护区
 
@@ -44,4 +40,4 @@ tests/test_drawdown_stop.py                 — 5 passed ✅ （旧，零回归�
 
 ---
 
-> 请顾问窗口审查 Step 7。
+> 请顾问窗口审查 Step 8。
