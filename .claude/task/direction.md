@@ -11,157 +11,126 @@ Step 3  截面动量      20+60 日 z-score 合成排名          ✅ 已完成
 Step 4  目标波动率    EWMA 协方差矩阵 + 容忍带            ✅ 已完成
 Step 5  相关性熔断    股债 60 日相关性 5 日 SMA            ✅ 已完成
 Step 6  回撤硬止损    8/12/18 三层                        ✅ 已完成
-Step 7  信号生成器    编排 Step 2-6                        ← 当前
-Step 8  组合管理器    仓位计算 + 资金路由
+Step 7  信号生成器    编排 Step 2-6                        ✅ 已完成
+Step 8  组合管理器    仓位计算 + 资金路由                  ← 当前
 Step 9  Recorder      日志记录 + 基准计算
 Step 10 回测主循环    日循环 + 参数扫描入口
 ```
 
-## 当前步骤：Step 7 — 信号生成器
+## 当前步骤：Step 8 — 组合管理器
 
 ### 背景
 
-信号生成器是决策链的编排层。它不实现任何算法，只按顺序调用 Step 2-6 的模块，输出一笔结构化的调仓信号。这是回测引擎和实盘执行共用的唯一入口。
+组合管理器是信号→仓位的转换层。接收 Step 7 的 Signal dict 和总资金，输出每只标的的精确持仓金额和资金路由路径。
 
 ```
-输入：当日全量数据（价格、净值、参数）
-  │
-  ├─ 趋势强度（Step 2）→ 每个资产的趋势方向
-  ├─ 截面动量（Step 3）→ 进攻层排名
-  ├─ 目标波动率（Step 4）→ 仓位缩放系数
-  ├─ 相关性熔断（Step 5）→ 资金是否进逆回购
-  └─ 回撤硬止损（Step 6）→ 最终仓位乘数（覆盖前面一切）
-  │
-输出：Signal dict
+Signal dict + total_capital
+    │
+    ├─ 回撤止损乘数 → 缩减总风险敞口
+    ├─ 相关性熔断 → 全部资金进逆回购
+    ├─ 防御层权重 × 70% × 总资金 × final_multiplier
+    ├─ 进攻层权重 × 30% × 总资金 × final_multiplier
+    └─ 进攻层空仓 → 30% 进逆回购（不回流防御层！）
+    │
+输出：{"positions": {...}, "repo_amount": ..., "cash": ...}
 ```
+
+### 关键约束
+
+**进攻层空仓时，30% 资金进逆回购，不回流防御层。** 这是系统最珍贵的职责分离结构——Beta 70% / Alpha 30% 的风险预算不可污染。如果回流，Beta 变成 100%，双引擎重新耦合，防御层的风险预算完全失效。
 
 ### 任务
 
-`src/signal_generator.py` — 一个函数：
+`src/portfolio_manager.py` — 一个函数：
 
 ```python
-generate_signal(
-    prices: dict[str, pd.DataFrame],
-    portfolio_value: pd.Series,
-    params: dict | None = None,
+allocate_capital(
+    signal: dict,
+    total_capital: float,
+    defense_ratio: float = 0.70,
 ) -> dict
 """
-生成当日调仓信号。
+根据信号分配资金。
 
-prices: {
-    "沪深300": DataFrame (open/high/low/close/volume, index=日期),
-    "创业板": DataFrame,
-    "纳指": DataFrame,
-    "黄金": DataFrame,
-    "国债ETF": DataFrame,
-    # 进攻层行业 ETF 候选（可选，暂不传则不计算进攻信号）
-}
-portfolio_value: 组合净值 Series，index=日期，按时间升序。
-params: 可选参数字典，默认值见下方。
+signal: Step 7 generate_signal 的输出。
+total_capital: 组合总资金（元）。
+defense_ratio: 防御层资金比例，默认 0.70（进攻层 = 1 - defense_ratio = 0.30）。
 
-返回 Signal dict:
-{
-    "date": str,                    # 信号日期 YYYY-MM-DD
-    "defense": {
-        "trend_strengths": {name: float},  # 每只防御标的趋势强度
-        "active": [name, ...],             # 趋势强度 > 0 的标的
-        "target_weights": {name: float},   # 目标波动率缩放后的权重
-        "scaling_factor": float,           # 仓位缩放系数
-    },
-    "offense": {
-        "rankings": [{name: score}, ...],  # 截面动量排名（降序，top 3）
-        "target_weights": {name: float},   # 等权目标权重
-    },
-    "circuit_breaker": {
-        "triggered": bool,           # 相关性熔断是否触发
-        "smoothed_corr": float,      # 平滑相关性
-    },
-    "drawdown_stop": {
-        "level": str,                # normal/warning/halve/liquidate
-        "position_multiplier": float, # 最终仓位乘数
-        "drawdown": float,           # 当前回撤
-    },
-    "execution": {
-        "final_multiplier": float,   # = min(scaling_factor, position_multiplier) → 或被熔断覆写为 0
-        "funds_to_repo": bool,       # 资金是否路由到逆回购
-    },
+返回: {
+    "date": str,
+    "total_capital": float,           # 输入总资金
+    "positions": {name: float},       # 每只标的持仓金额（元）
+    "defense_total": float,           # 防御层总金额
+    "offense_total": float,           # 进攻层总金额
+    "repo_amount": float,             # 逆回购金额
+    "exposure": float,                # 总风险敞口（非逆回购部分）
+    "exposure_ratio": float,          # 风险敞口 / 总资金
 }
 
-默认参数：
-{
-    "trend_window": 60,
-    "momentum_short": 20,
-    "momentum_long": 60,
-    "offense_top_k": 3,
-    "target_vol_beta": 0.10,
-    "target_vol_alpha": 0.20,
-    "vol_tolerance": 0.015,
-    "ewma_lambda": 0.94,
-    "corr_window": 60,
-    "corr_sma_window": 5,
-    "corr_threshold": 0.0,
-}
-```
+计算逻辑：
+1. 基础资金池：
+   defense_pool = total_capital * defense_ratio
+   offense_pool = total_capital * (1 - defense_ratio)
 
-### 逻辑流程
+2. 回撤止损覆盖：
+   defense_pool *= signal["drawdown_stop"]["position_multiplier"]
+   offense_pool *= signal["drawdown_stop"]["position_multiplier"]
+   （multiplier=0.5 时两池各减半，multiplier=0 时全清）
 
-```
-1. 从 prices 提取各资产 close 列
-2. 防御层趋势强度：
-   for each 防御标的 in ["沪深300","创业板","纳指","黄金","国债ETF"]:
-       trend_strength(close, window=trend_window)
-   active = [name for name, ts in trend_strengths if ts > 0]
+3. 相关性熔断检查：
+   if signal["circuit_breaker"]["triggered"]:
+       → 全部资金进逆回购
+       → positions = {}, repo = total_capital
+       → 跳过步骤 4-5
 
-3. 防御层目标波动率：
-   取 active 标的的 close 组成 DataFrame
-   ewma_covariance(prices, lambda_=ewma_lambda)
-   portfolio_volatility(target_weights, cov)  ← 权重来自 etf_universe 参考权重（仅 active 部分，归一化）
-   scaling_factor(target_vol_beta, predicted_vol, vol_tolerance)
+4. 防御层分配：
+   for name, weight in signal["defense"]["target_weights"]:
+       positions[name] = defense_pool * weight
 
-4. 进攻层截面动量（如有行业 ETF 候选）：
-   composite_momentum(prices, momentum_short, momentum_long)
-   取 top 3，等权分配
+5. 进攻层分配：
+   if signal["offense"]["target_weights"] 非空:
+       for name, weight in signal["offense"]["target_weights"]:
+           positions[name] = offense_pool * weight
+   else:
+       → repo_amount += offense_pool  （不回流防御层！）
 
-5. 相关性熔断：
-   股票篮子 = {"沪深300": close, "创业板": close, "纳指": close}
-   correlation_circuit_breaker(股票篮子, 国债ETF_close, corr_window, corr_sma_window, corr_threshold)
-
-6. 回撤硬止损：
-   compute_drawdown(portfolio_value) → 取最后值
-   drawdown_stop(drawdown) → level + multiplier
-
-7. execution 汇总：
-   - 熔断触发 → funds_to_repo=True, final_multiplier=0
-   - 否则 final_multiplier = min(scaling_factor, position_multiplier)
+6. 汇总：
+   repo_amount += total_capital - sum(positions) - 已计入的 repo
+   （剩余零钱也进逆回购）
+   exposure = sum(positions.values())
+   exposure_ratio = exposure / total_capital
+"""
 ```
 
 ### 测试（先写，必须红灯）
 
-`tests/test_signal_generator.py` — 4 个场景（全用合成数据）：
+`tests/test_portfolio_manager.py` — 5 个场景：
 
-1. **全绿正常信号**：构造防御层 5 标的全部单边上涨（趋势 > 0）、无回撤、股债负相关。验证 defense.active 含全部 5 标的，circuit_breaker.triggered=False，drawdown_stop.level="normal"，final_multiplier > 0。
+1. **全绿正常分配**：构造全绿 signal（5 标的 active，无熔断，normal 止损）。total_capital=1,000,000。验证 defense_total=700,000，offense 空 → repo=300,000，exposure_ratio=0.70。
 
-2. **趋势过滤排除**：沪深300 下跌（趋势 < 0），其余上涨。验证 defense.active 不含 "沪深300"。
+2. **进攻层持仓**：signal 含进攻层 3 标的 target_weights。验证 offense_total=300,000，3 标的等权分配（各 100,000），defense_total=700,000。
 
-3. **熔断覆盖**：股债正相关。验证 circuit_breaker.triggered=True，execution.funds_to_repo=True，final_multiplier=0。
+3. **熔断全进逆回购**：signal 熔断触发。验证 positions 为空，repo_amount=1,000,000，exposure=0。
 
-4. **回撤止损覆盖**：组合净值大幅回撤 20%。验证 drawdown_stop.level="liquidate"，position_multiplier=0.0，final_multiplier=0。
+4. **回撤减半**：signal drawdown_stop level="halve", multiplier=0.5。验证 defense_total=350,000（700k×0.5），offense 空 → repo=650,000（300k + 350k 被砍部分）。
+
+5. **进攻层空仓不回流**：signal defense.active 含 5 标的但 offense.target_weights 为空。验证 offense_pool=300,000 全部进 repo，defense_total 仍为 700,000（非 1,000,000）。这是本模块最关键的测试。
 
 ### 约束
 
-- 信号生成器只做编排，不实现算法。所有计算委托给 Step 2-6 模块。
-- 防御层参考权重来自 `src/etf_universe.py` 的 `ETF_UNIVERSE` 字典顺序，暂用等权（各 20%）。方向性讨论的参考权重（25/10/15/10/40）在 Step 8 组合管理器中实现。
-- 进攻层候选暂不传入（`prices` 中无行业 ETF key），`offense` 字段返回空结构 `{"rankings": [], "target_weights": {}}`。
-- 参数全部可配，默认值与方向性讨论一致。
+- 不写 Recorder、回测主循环等后续模块代码
+- 资金计算使用浮点数，不处理整数股数（Step 10 回测主循环中再处理取整）
+- 权重字典的 value 之和可能不为 1（如趋势过滤后只剩部分标的），直接用给定权重不做内部归一化（权重归一化由 signal_generator 保证）
+- `defense_ratio` 默认 0.70
 
 ### 验收标准
 
-- [ ] `python -m pytest tests/test_signal_generator.py -v` — 4/4 绿
-- [ ] `python -m pytest tests/test_trend_strength.py tests/test_cross_sectional_momentum.py tests/test_target_volatility.py tests/test_correlation_circuit_breaker.py tests/test_drawdown_stop.py -v` — 旧测试不红
-- [ ] `python -c "from src.signal_generator import generate_signal; print('OK')"` — 无报错
+- [ ] `python -m pytest tests/test_portfolio_manager.py -v` — 5/5 绿
+- [ ] `python -m pytest tests/test_signal_generator.py -v` — 旧测试不红
+- [ ] `python -c "from src.portfolio_manager import allocate_capital; print('OK')"` — 无报错
 
 ---
 
-> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 7"。
-> 顾问审核通过并 commit 后，更新本文 Step 8。
+> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 8"。
+> 顾问审核通过并 commit 后，更新本文 Step 9。
 > 禁止跳过步骤，禁止一次完成多步。
