@@ -14,7 +14,9 @@ Step 6  回撤硬止损    8/12/18 三层                        ✅ 已完成
 Step 7  信号生成器    编排 Step 2-6                        ✅ 已完成
 Step 8  组合管理器    仓位计算 + 资金路由                  ✅ 已完成
 Step 9  Recorder      日志记录 + 基准计算                  ✅ 已完成
-Step 10 回测主循环    日循环 + 参数扫描入口                ← 当前
+Step 10 回测主循环    日循环 + 参数扫描入口               ✅ 已完成
+
+## 当前状态：10 步全部完成。下一步 → 真实数据回测 + 参数验证。
 ```
 
 ## 当前步骤：Step 10 — 回测主循环
@@ -149,9 +151,9 @@ param_grid: {"trend_window": [40, 60, 80], "target_vol_beta": [0.08, 0.10, 0.12]
 
 ### 验收标准
 
-- [ ] `python -m pytest tests/test_backtest_engine.py -v` — 3/3 绿
-- [ ] `python -m pytest tests/ -v` — 全部不红（AKShare 相关 skip 除外）
-- [ ] `python -c "from src.backtest_engine import run_backtest, parameter_scan; print('OK')"` — 无报错
+- [x] `python -m pytest tests/test_backtest_engine.py -v` — 3/3 绿
+- [x] `python -m pytest tests/ -v` — 60 passed, 3 skipped, 0 failed
+- [x] `python -c "from src.backtest_engine import run_backtest, parameter_scan; print('OK')"` — 无报错
 
 ---
 
