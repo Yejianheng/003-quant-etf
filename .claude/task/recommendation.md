@@ -4,39 +4,26 @@
 
 ## 审查结论
 
-**建议：放行（附条件：先修 `logs/` 的 `.gitignore`）**
+**建议：放行**
 
 ## 分析
 
 ### 逻辑正确性
 
-- `annualized_return`：`ln(P_t/P_{t-N}) × 252/N`，取最近 window 个价格，公式正确。
-- `annualized_volatility`：`std(log_returns, ddof=1) × √252`，样本标准差，公式正确。
-- `trend_strength`：`ann_ret / ann_vol`，数据不足/波动率为零均返回 0.0，边界安全。
-- `get_logger`：双输出（stdout + FileHandler）、防重复 handler、`propagate=False` 禁 root 传播，实现干净。
+- `momentum_score(prices, window)`：`ln(P_t / P_{t-N})`，逐列独立计算，与 Step 2 对数收益率一致。数据不足返回 NaN。
+- `cross_sectional_zscore(scores)`：`(x - mean) / std(ddof=1)`，样本标准差。单资产（std=NaN）→ 返回 0.0，全相同（std=0）→ 返回 0.0。NaN 输入 → NaN 输出（pandas 原生行为）。
+- `composite_momentum(prices, window_short=20, window_long=60)`：双窗口等权 `(z_20 + z_60) / 2` → dropna → 降序排列。全部不足返回空 Series。
 
 ### 副作用评估
 
-- 新建文件，未修改现有模块。Step 1 代码零改动。
-- Step 1 红线 `test_fetch_returns_dataframe_with_required_columns` 确认为 AKShare 外部故障（`data_pipeline.py` 代码未改，Step 1 commit 时绿），非 Step 2 引入。已记录 issues.md #4。
-- Step 2 场景 4 真实数据测试加了 `pytest.skip` 空数据保护，模式正确——外部依赖不稳定时测试不应硬挂。
+- 新建文件，未修改现有模块。零副作用。
+- 测试全用合成数据，无 AKShare 依赖，不受外部 API 波动影响——比 Step 1/2 的测试更稳健。
 
 ### 安全合规
 
 - 未触碰 protected-files.json。
 - 无硬编码凭证。
-- 公式参数（window=60）是方向性讨论已定默认值，非硬编码魔法数。
-
-## 待修（合入前）
-
-| # | 问题 | 修复 |
-|---|------|------|
-| 1 | `logs/` 未在 `.gitignore`，测试产生 untracked 文件 | `.gitignore` 加 `logs/` |
-
-## 隐患更新
-
-- 技术隐患 #2（无日志机制）→ 已解决
-- 技术隐患 #4（AKShare 空数据）→ 新发现，已记录
+- window 默认值（20/60）来自方向性讨论已定事项。
 
 ## 驳回理由（如驳回）
 
@@ -44,8 +31,7 @@
 
 ## 下一步
 
-1. `.gitignore` 加 `logs/` → commit
-2. 放行 Step 2 → 进入 Step 3
+放行 → commit Step 3 → 更新 direction.md 写入 Step 4（目标波动率）。
 
 ---
 
