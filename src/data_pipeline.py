@@ -1,6 +1,8 @@
 # [2026-05-27] 新增：数据管线 — AKShare → Parquet
+# [2026-05-27] 修改：save_to_parquet 自动创建目录（技术隐患 #3）
 # [2026-05-27] 修改：fetch_etf_daily 加代理绕过 + 重试 + 异常分类
 
+import os
 import time
 import pandas as pd
 import akshare as ak
@@ -82,7 +84,8 @@ def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
 
 
 def save_to_parquet(df: pd.DataFrame, path: str) -> None:
-    """写入 Parquet，保留 index。"""
+    """写入 Parquet，保留 index。自动创建目标目录。"""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     df.to_parquet(path, index=True)
 
 
