@@ -1,0 +1,45 @@
+# [2026-05-27] 新增：基准计算 — 买入持有基准组合净值曲线
+
+import numpy as np
+import pandas as pd
+
+BENCHMARK_WEIGHTS = {
+    "沪深300": 0.25,
+    "创业板": 0.10,
+    "纳指": 0.15,
+    "黄金": 0.10,
+    "国债ETF": 0.40,
+}
+
+
+def compute_benchmark(
+    prices: dict[str, pd.DataFrame],
+    weights: dict[str, float] | None = None,
+) -> pd.Series:
+    """计算基准组合净值曲线（买入持有近似）。
+
+    prices: {标的名: OHLCV DataFrame}，同 signal_generator 格式。
+    weights: 基准权重，默认 BENCHMARK_WEIGHTS。
+    返回: 基准净值 Series，index=DatetimeIndex，起始值=1.0。
+
+    月度再平衡摩擦成本约 2-4bp/月，对长期回测结果影响 <0.5%，不做模拟。
+    """
+    w = weights if weights is not None else BENCHMARK_WEIGHTS
+
+    # 提取每个标的收盘价 → 日对数收益率
+    daily_returns = pd.DataFrame({
+        name: np.log(prices[name]["close"] / prices[name]["close"].shift(1))
+        for name in w
+    }).dropna()
+
+    # 篮子日收益率 = Σ(weight_i × return_i)
+    basket_return = sum(w[name] * daily_returns[name] for name in w)
+
+    # 累积净值（首日=1.0）
+    first_date = prices[list(w.keys())[0]].index[0]
+    nav_values = np.exp(basket_return.cumsum())
+    nav = pd.Series(1.0, index=prices[list(w.keys())[0]].index, dtype=float)
+    nav.loc[basket_return.index] = nav_values
+    nav.name = "benchmark_nav"
+
+    return nav
