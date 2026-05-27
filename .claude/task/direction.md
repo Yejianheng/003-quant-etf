@@ -5,8 +5,8 @@
 ## 总体规划（10 步）
 
 ```
-Step 1  数据管线      AKShare → Parquet
-Step 2  趋势强度      年化收益率 / 年化波动率
+Step 1  数据管线      AKShare → Parquet                ✅ 已完成
+Step 2  趋势强度      年化收益率 / 年化波动率            ← 当前
 Step 3  截面动量      20+60 日 z-score 合成排名
 Step 4  目标波动率    EWMA 协方差矩阵 + 容忍带
 Step 5  相关性熔断    股债 60 日相关性 5 日 SMA
@@ -17,67 +17,99 @@ Step 9  Recorder      日志记录 + 基准计算
 Step 10 回测主循环    日循环 + 参数扫描入口
 ```
 
-## 当前步骤：Step 1 — 数据管线
+## 当前步骤：Step 2 — 趋势强度
+
+### 背景
+
+趋势强度是全系统统一的"买不买"信号（方向性讨论.md 决策链第一关）：
+
+```
+趋势强度 = 年化收益率 / 年化波动率
+年化收益率 = ln(P_t / P_{t-N}) × (252 / N)
+年化波动率 = std(日收益率) × √252
+
+趋势强度 ≤ 0 → 排除（下跌或横盘，不暴露风险）
+趋势强度 > 0 → 进入候选
+```
+
+输入是 close 价格的 pandas Series（DatetimeIndex），输出是标量趋势强度值。
 
 ### 任务
 
-从 AKShare 拉取 ETF 历史日线数据，存储为 Parquet 文件。覆盖防御层全部标的（沪深300/创业板/纳指/黄金/国债ETF）的 ETF 行情。
+#### 2a. 趋势强度模块 `src/trend_strength.py`
+
+```python
+annualized_return(prices: pd.Series, window: int = 60) -> float
+"""
+计算年化收益率。
+prices: 收盘价 Series，index 为日期（DatetimeIndex），按时间升序。
+window: 回看窗口（交易日数），默认 60。
+公式：ln(P_t / P_{t-N}) × (252 / window)
+"""
+
+annualized_volatility(prices: pd.Series, window: int = 60) -> float
+"""
+计算年化波动率。
+prices: 同上。
+公式：std(日对数收益率) × √252
+日收益率使用对数收益率 ln(P_t / P_{t-1})，skipna=True。
+"""
+
+trend_strength(prices: pd.Series, window: int = 60) -> float
+"""
+计算趋势强度 = 年化收益率 / 年化波动率。
+prices 长度不足 window → 返回 0.0（数据不足，不参与交易）。
+波动率为 0（如停牌）→ 返回 0.0。
+"""
+```
+
+#### 2b. 日志模块 `src/logging_config.py`
+
+解决 issues.md #2（无日志机制）：
+
+```python
+get_logger(name: str) -> logging.Logger
+"""
+返回统一配置的 logger。
+格式：`%(asctime)s | %(levelname)-8s | %(name)s | %(message)s`
+默认级别 INFO，同时输出到 stdout 和 logs/app.log。
+logs/ 目录自动创建。
+"""
+```
+
+每个后续模块通过 `logger = get_logger(__name__)` 获取 logger。
 
 ### 测试（先写，必须红灯）
 
-`tests/test_data_pipeline.py` — 3 个场景：
+`tests/test_trend_strength.py` — 4 个场景：
 
-1. **正常拉取**：调用 fetch_etf_daily("510300", "2024-01-01", "2024-12-31")，返回非空 DataFrame，含列 open/high/low/close/volume，index 为日期
-2. **空参数处理**：起止日期为周末/节假日时，不抛异常，返回空 DataFrame
-3. **存储读取往返**：DataFrame 写入 Parquet → 读回 → 与原 DataFrame 完全一致（列、值、行数）
+1. **上涨趋势**：构造 120 天单边上涨 close 序列（对数收益率恒定正），window=60。验证 trend_strength > 0 且年化收益率 ≈ 设定值、年化波动率 ≈ 0。
 
-### 代码（测试红灯后再写）
+2. **下跌趋势**：构造 120 天单边下跌 close 序列（对数收益率恒定负），window=60。验证 trend_strength < 0。
 
-`src/data_pipeline.py` — 两个函数：
+3. **数据不足**：传入长度 30 的 Series，window=60。验证 trend_strength 返回 0.0。
 
-```python
-fetch_etf_daily(code, start_date, end_date)
-"""
-从 AKShare 拉取单只 ETF 日线，返回 pandas DataFrame。
-code: ETF 代码，如 "510300"（沪深300ETF）
-"""
-  → 调 akshare.fund_etf_hist_em(symbol=code, start_date=..., end_date=..., adjust="qfq")
-  → 保留列：日期(设为index)、开盘、最高、最低、收盘、成交量
-  → 英文列名：date/open/high/low/close/volume
+4. **真实数据往返**：用 `fetch_etf_daily("510300", "2024-01-01", "2024-06-30")` 取真实数据，调 trend_strength(close, window=60)，验证返回 float 且非 NaN。
 
-save_to_parquet(df, path)
-load_from_parquet(path) → DataFrame
-"""
-Parquet 读写，保留 index。
-"""
-```
+`tests/test_logging_config.py` — 1 个场景：
 
-对照表文件 `src/etf_universe.py` — ETF 代码映射：
-
-```python
-# 防御层标的 → ETF 代码（上交所）
-ETF_UNIVERSE = {
-    "沪深300": "510300",
-    "创业板": "159915",
-    "纳指": "513100",
-    "黄金": "518880",
-    "国债ETF": "511010",
-}
-```
+1. **logger 正常输出**：get_logger("test") 返回 Logger 实例，level=INFO，有 StreamHandler。
 
 ### 约束
 
-- 不写趋势强度、动量、回测等任何后续模块代码
-- AKShare 首次调用可能较慢，测试需设合理超时（60s）
-- Parquet 写入 `data/` 目录
+- 不写截面动量、目标波动率等后续模块代码
+- 日收益率使用对数收益率（与方向性讨论一致），不用简单收益率
+- `annualized_volatility` 的 `std(ddof=1)`（样本标准差）
+- 输入 prices 假设已是 DatetimeIndex 且升序排列，不需函数内排序
 
 ### 验收标准
 
-- [ ] `python -m pytest tests/test_data_pipeline.py -v` — 3/3 绿
-- [ ] `python -c "from src.data_pipeline import fetch_etf_daily; df=fetch_etf_daily('510300','2024-01-01','2024-01-31'); print(df.shape)"` — 无报错
+- [ ] `python -m pytest tests/test_trend_strength.py tests/test_logging_config.py -v` — 5/5 绿
+- [ ] `python -m pytest tests/test_data_pipeline.py -v` — 3/3 绿（安全带，Step 1 不受影响）
+- [ ] `python -c "from src.trend_strength import trend_strength; print('OK')"` — 无报错
 
 ---
 
-> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 1"。
-> 顾问审核通过并 commit 后，更新本文 Step 2。
+> 完成本步后：写 outcome.md → 提示"请顾问窗口审查 Step 2"。
+> 顾问审核通过并 commit 后，更新本文 Step 3。
 > 禁止跳过步骤，禁止一次完成多步。
