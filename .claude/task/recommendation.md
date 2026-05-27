@@ -10,20 +10,34 @@
 
 ### 逻辑正确性
 
-- `compute_drawdown`：`expanding().max()` 跑滚动峰值 → `(value - peak) / peak`。一行核心逻辑，正确。
-- `drawdown_stop`：`abs(drawdown)` 四级 if-else，阈值 0.08/0.12/0.18，multiplier 1.0/1.0/0.5/0.0。与方向性讨论完全一致。
-- 场景 3（先新高后回撤）验证了 running_max 跟随新高的关键行为——回撤基于 150 而非 100。
-- 场景 4（回撤恢复）验证了反弹不降 running_max——不因价格回升而错误"复仓"。
+决策链 7 步编排完整且优先级正确：
+
+1. close 提取 → 2. 趋势强度过滤（ts>0 → active）→ 3. 目标波动率缩放（等权 → EWMA cov → scaling_factor）→ 4. 截面动量排名（offense 候选 → top K）→ 5. 相关性熔断（股债相关性 → triggered）→ 6. 回撤止损（current dd → level+multiplier）→ 7. execution 汇总。
+
+关键优先级（line 91-96）：
+- 熔断触发 → `final_multiplier=0, funds_to_repo=True`（覆盖一切）
+- 否则 → `min(scaling_factor, position_multiplier)`（取保守值）
+
+正确。
+
+### 边界处理
+
+- active 为空 → sf=1.0, 空权重，不崩溃。
+- 无 offense 候选 → 空 rankings/weights，不崩溃。
+- 缺股票篮子或国债 → 熔断默认不触发，不崩溃。
+- 参数全部可配，`{**DEFAULT_PARAMS, **(params or {})}` 合并模式安全。
 
 ### 副作用评估
 
-- 新建文件，未修改现有模块。零副作用。
-- 全模块 35 行，无依赖（仅 pandas），零冗余。
+- 新建文件，零修改现有模块。
+- 纯编排，不实现算法。调用链清晰可追溯。
+- 测试覆盖 4 条集成路径（全绿/趋势过滤/熔断覆盖/止损覆盖），与单元测试互补无重叠。
 
 ### 安全合规
 
 - 未触碰 protected-files.json。
 - 无硬编码凭证。
+- 默认参数与方向性讨论一致。
 
 ## 驳回理由（如驳回）
 
@@ -31,7 +45,7 @@
 
 ## 下一步
 
-放行 → commit Step 6 → 更新 direction.md 写入 Step 7（信号生成器）。
+放行 → commit Step 7 → 更新 direction.md 写入 Step 8（组合管理器）。
 
 ---
 
