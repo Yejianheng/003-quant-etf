@@ -12,3 +12,4 @@ build/
 htmlcov/
 .claude/settings.local.json
 logs/
+.claude/.gate/

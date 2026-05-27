@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:www.man.com)"
+      "WebFetch(domain:www.man.com)",
+      "Bash(mkdir -p \"d:/AI项目/003-quant-etf/.claude/.gate\")"
     ]
   }
 }
