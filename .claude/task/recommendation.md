@@ -10,25 +10,23 @@
 
 ### 逻辑正确性
 
-- `ewma_covariance`：
-  - 日对数收益率 `ln(P_t/P_{t-1})`，取最近 window 天，与 Step 2/3 一致。
-  - EWMA 权重 `(1-λ) × λ^(T-1-t)`，最新观测 t=T-1 → λ^0=1 权重最大。公式正确。
-  - 权重归一化 `/ Σw_t`，加权均值去中心化，双层循环算协方差。正确。
-  - 年化 ×252。正确。
-  - T<2 → 全零矩阵，边界安全。
-- `portfolio_volatility`：`sqrt(w^T Σ w)`，`max(var, 0)` 防浮点负值。正确。
-- `scaling_factor`：容忍带 `|pred - target| ≤ 0.015 → 1.0`，predicted≤0 → 1.0 异常保护，带外 `target/predicted`。全部正确。
+- `stock_basket_returns`：逐 ETF 算对数收益率 → DataFrame → `mean(axis=1, skipna=True)`。某 ETF 缺数据用其余均值，正确。
+- `rolling_correlation`：pandas `.rolling(window).corr()` 一行，干净。
+- `correlation_circuit_breaker`：
+  - 日期对齐 `intersection`：主动处理中美交易日不同（沪深300/纳指日历交叉），设计细心。
+  - 数据不足 `< corr_window + sma_window` → 返回默认值，正确。
+  - `smoothed_corr > threshold`（默认 0.0），与方向性讨论一致。
+  - 额外返回 `raw_corr` 用于调试，不违反 spec。
 
 ### 副作用评估
 
 - 新建文件，未修改现有模块。零副作用。
-- 测试纯合成数据，无外部依赖。EWMA 特性验证用等权协方差做对照组，设计聪明。
+- 测试全合成数据，无外部依赖。正/负相关场景通过共享/反向噪声构造，设计聪明。
 
 ### 安全合规
 
 - 未触碰 protected-files.json。
 - 无硬编码凭证。
-- λ=0.94、tolerance=0.015 来自方向性讨论已定事项，非魔法数。
 
 ## 驳回理由（如驳回）
 
@@ -36,7 +34,7 @@
 
 ## 下一步
 
-放行 → commit Step 4 → 更新 direction.md 写入 Step 5（相关性熔断）。
+放行 → commit Step 5 → 更新 direction.md 写入 Step 6（回撤硬止损）。
 
 ---
 
