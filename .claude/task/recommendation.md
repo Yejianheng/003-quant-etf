@@ -1,80 +1,55 @@
-# 顾问审查建议 — Step 10 暨最终审查
+# 顾问审查建议 — 真实数据回测
 
-> 顾问写入。读完 outcome.md + git diff 后填写。**本文件是给人看的决策材料**，不直接放行。
+> 顾问写入。读完 outcome.md + git diff 后填写。
 
 ## 审查结论
 
-**建议：放行。10 步回测开发计划全部完成。**
+**建议：放行。数据拉取成功，回测引擎在真实数据上正常运转。** 但策略绩效暴露严重问题，需立即进入参数调优阶段。
 
-## 全量测试结果
+## 任务 A：数据拉取 ✅
 
-```
-63 tests: 61 passed, 1 failed (AKShare 外部，已知), 1 skipped
-```
+| 验证项 | 结果 |
+|--------|:--:|
+| 5 个 parquet 文件 | 通过（159915/510300/511010/513100/518880） |
+| 每文件 >1000 行 | 通过（1941-1942 行，2018-2025 全覆盖） |
+| 共同交易日 | 1940 天 |
 
-| 模块 | 测试 | 状态 |
-|------|:--:|:--:|
-| config | 3 | 绿 |
-| data_pipeline | 2+1红 | 1 红 = AKShare API |
-| trend_strength | 5+1skip | 绿 |
-| cross_sectional_momentum | 7 | 绿 |
-| target_volatility | 11 | 绿 |
-| correlation_circuit_breaker | 8 | 绿 |
-| drawdown_stop | 5 | 绿 |
-| logging_config | 3 | 绿 |
-| signal_generator | 4 | 绿 |
-| portfolio_manager | 5 | 绿 |
-| recorder | 3 | 绿 |
-| benchmark | 2 | 绿 |
-| backtest_engine | 3 | 绿 |
+**数据源切换**：东方财富 API 从当前网络不可达（TLS 后 RST），切换到新浪数据源 `fund_etf_hist_sina`。未修改已有业务代码，仅在执行脚本中切换。
 
-## 分析
+## 任务 B：回测 ✅（引擎层面）
 
-### 回测引擎正确性
+- 日循环正常跑完 1820 天，无崩溃
+- `run_backtest` 返回完整绩效指标
+- `benchmark.py` 要求 prices key 为中文名（"沪深300"），非代码号（"510300"）。执行脚本已适配，未改源码。
 
-- **无前视偏差**：`visible_prices = {name: df.loc[:today]}` 确保每日信号只看到当日及之前的数据。
-- **估值逻辑**：昨日持仓 × 今日收盘价 + repo_cash。调仓按今日收盘价成交（简化）。
-- **日期对齐**：`set.intersection` 取所有标的中美交易日交集，一致性保证。
-- **绩效指标**：年化收益/波动/Sharpe/回撤/Calmar，公式全部正确，与 Step 2/4 的 ddof=1 一致。
+## 绩效分析 ⚠
 
-### 参数扫描
+| 指标 | 策略 | 基准 | 评价 |
+|------|------|------|------|
+| 总收益 | -0.70% | +34.85% | 跑输 35pp |
+| 年化收益 | -0.10% | — | 实质亏损 |
+| 年化波动 | 8.97% | — | 偏低（过于保守） |
+| Sharpe | -0.01 | — | 无风险收益 |
+| 最大回撤 | -23.83% | — | **超 20% 硬约束** |
 
-- 笛卡尔积遍历 → 独立回测 → Sharpe 降序。隔离干净。
-- 排除 DataFrame/Series（records_df/benchmark_nav）只保留标量，避免结果膨胀。
+**根因推测**：默认参数下策略过于保守，大部分时间处于现金/防御模式。趋势过滤阈值可能过高、截面动量排序偏向国债/黄金等低波动资产。NAV 后期长时间不变——进攻层未激活或仓位被回撤止损锁死。
 
-### 副作用评估
+**方向**：性能问题非代码缺陷，是参数问题。下一步进入方向性讨论阶段 2（16 项参数扫描），在真实数据上网格搜索最优参数组合。
 
-- 新建文件，零修改已有模块。依赖 Step 1-9 全部模块但仅 import 调用。
-- 关键简化（零滑点/浮点股数/收盘价成交）在 direction 和代码注释中明确声明。
+## 代码完整性
 
-### 安全合规
+- 修改文件：仅 `direction.md` + `outcome.md`（任务管理文件）
+- 业务代码：零修改
+- 保护区：未触碰
+- 全量测试：60 passed / 3 skipped（零回归）
 
-- 未触碰 protected-files.json。
-- 无硬编码凭证。
-
-## 10 步开发总结
-
-| # | 模块 | 文件 | 行数 |
-|---|------|------|:--:|
-| 1 | 数据管线 | data_pipeline.py + etf_universe.py | 62 |
-| 2 | 趋势强度 + 日志 | trend_strength.py + logging_config.py | 71 |
-| 3 | 截面动量 | cross_sectional_momentum.py | 42 |
-| 4 | 目标波动率 | target_volatility.py | 55 |
-| 5 | 相关性熔断 | correlation_circuit_breaker.py | 70 |
-| 6 | 回撤硬止损 | drawdown_stop.py | 35 |
-| 7 | 信号生成器 | signal_generator.py | 124 |
-| 8 | 组合管理器 | portfolio_manager.py | 61 |
-| 9 | Recorder + 基准 | recorder.py + benchmark.py | 95 |
-| 10 | 回测引擎 | backtest_engine.py | 162 |
-| **合计** | **13 源文件 + 12 测试文件** | | **~777** |
-
-## 驳回理由（如驳回）
+## 驳回理由
 
 （无）
 
 ## 下一步
 
-放行 → commit Step 10 → 10 步计划完成。后续进入参数验证阶段（方向性讨论 阶段 2：16 项参数扫描）。
+放行 → commit → 进入方向性讨论阶段 2：真实数据上的参数扫描。
 
 ---
 
