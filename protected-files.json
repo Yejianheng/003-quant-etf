@@ -11,6 +11,7 @@
   "protected_dirs": [
     "prompts/",
     ".claude/rules/",
-    ".claude/hooks/"
+    ".claude/hooks/",
+    "技术隐患/"
   ]
 }
