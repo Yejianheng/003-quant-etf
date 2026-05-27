@@ -26,17 +26,25 @@ def compute_benchmark(
     """
     w = weights if weights is not None else BENCHMARK_WEIGHTS
 
+    # 只使用 prices 中实际存在的标的
+    available = [name for name in w if name in prices]
+    if not available:
+        raise ValueError("prices 中无任何基准标的，无法计算基准净值")
+    # 归一化可用权重
+    total_w = sum(w[name] for name in available)
+    active_weights = {name: w[name] / total_w for name in available}
+
     # 提取每个标的收盘价 → 日对数收益率
     daily_returns = pd.DataFrame({
         name: np.log(prices[name]["close"] / prices[name]["close"].shift(1))
-        for name in w
+        for name in available
     }).dropna()
 
     # 篮子日收益率 = Σ(weight_i × return_i)
-    basket_return = sum(w[name] * daily_returns[name] for name in w)
+    basket_return = sum(active_weights[name] * daily_returns[name] for name in available)
 
     # 累积净值（首日=1.0）
-    first_date = prices[list(w.keys())[0]].index[0]
+    first_date = prices[available[0]].index[0]
     nav_values = np.exp(basket_return.cumsum())
     nav = pd.Series(1.0, index=prices[list(w.keys())[0]].index, dtype=float)
     nav.loc[basket_return.index] = nav_values
