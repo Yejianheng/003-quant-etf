@@ -10,3 +10,4 @@ dist/
 build/
 .coverage
 htmlcov/
+.claude/settings.local.json
