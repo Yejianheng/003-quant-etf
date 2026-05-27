@@ -4,5 +4,44 @@
       "WebFetch(domain:www.man.com)",
       "Bash(mkdir -p \"d:/AI项目/003-quant-etf/.claude/.gate\")"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \".claude/hooks/pre_bash.js\"",
+            "shell": "bash",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \".claude/hooks/pre_edit_file.js\"",
+            "shell": "bash",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \".claude/hooks/post-edit-audit.sh\"",
+            "shell": "bash",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
   }
 }
