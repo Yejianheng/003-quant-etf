@@ -1,43 +1,84 @@
 # [2026-05-27] 新增：数据管线 — AKShare → Parquet
+# [2026-05-27] 修改：fetch_etf_daily 加代理绕过 + 重试 + 异常分类
 
+import time
 import pandas as pd
 import akshare as ak
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # 秒，指数退避: 2s → 4s → 8s
+
+
+def _patch_requests_no_proxy():
+    """Monkey-patch requests.Session 强制不走系统代理（VPN 残留 127.0.0.1:7890）。"""
+    import requests
+    _original_init = requests.Session.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        _original_init(self, *args, **kwargs)
+        self.trust_env = False
+
+    requests.Session.__init__ = _patched_init
+
+
+_patch_requests_no_proxy()
 
 
 def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
     """从 AKShare 拉取单只 ETF 日线，返回 pandas DataFrame。code: ETF 代码，如 "510300"."""
-    try:
-        df = ak.fund_etf_hist_em(
-            symbol=code,
-            start_date=start_date.replace("-", ""),
-            end_date=end_date.replace("-", ""),
-            adjust="qfq",
+    for attempt in range(_MAX_RETRIES):
+        try:
+            df = ak.fund_etf_hist_em(
+                symbol=code,
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="qfq",
+            )
+        except Exception as e:
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"AKShare 调用失败 (code={code}, attempt={attempt + 1}/{_MAX_RETRIES}): "
+                f"{type(e).__name__}: {e}"
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(delay)
+            else:
+                logger.error(
+                    f"AKShare 重试 {_MAX_RETRIES} 次后仍失败 (code={code})，返回空 DataFrame。"
+                    f"可能原因：网络不可达 / 东方财富限流 / VPN 干扰。"
+                )
+                return pd.DataFrame()
+            continue
+
+        # AKShare 调用成功
+        if df is None or df.empty:
+            logger.info(f"AKShare 返回空数据 (code={code}, {start_date}~{end_date})，"
+                        f"可能是非交易日区间")
+            return pd.DataFrame()
+
+        # 中文列名 → 英文
+        df = df.rename(
+            columns={
+                "日期": "date",
+                "开盘": "open",
+                "最高": "high",
+                "最低": "low",
+                "收盘": "close",
+                "成交量": "volume",
+            }
         )
-    except Exception:
-        return pd.DataFrame()
+        cols = ["date", "open", "high", "low", "close", "volume"]
+        available = [c for c in cols if c in df.columns]
+        df = df[available]
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df.sort_index()
+        return df
 
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # akshare 返回的日期列名是中文
-    df = df.rename(
-        columns={
-            "日期": "date",
-            "开盘": "open",
-            "最高": "high",
-            "最低": "low",
-            "收盘": "close",
-            "成交量": "volume",
-        }
-    )
-    # 只保留需要的列
-    cols = ["date", "open", "high", "low", "close", "volume"]
-    available = [c for c in cols if c in df.columns]
-    df = df[available]
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date")
-    df = df.sort_index()
-    return df
+    return pd.DataFrame()
 
 
 def save_to_parquet(df: pd.DataFrame, path: str) -> None:
