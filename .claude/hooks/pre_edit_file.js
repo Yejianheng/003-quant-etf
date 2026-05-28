@@ -19,7 +19,8 @@ process.stdin.on("end", () => {
   const filePath = (toolInput.file_path || "").replace(/\\/g, "/");
 
   // ── 角色门禁：顾问角色禁止所有 Edit/Write ── @claude-override-approved
-  const ROLE_FILE = path.join(__dirname, "..", ".gate", "role.json");
+  // @claude-override-approved
+  const ROLE_FILE = path.join(__dirname, "..", "role.json");
   try {
     if (fs.existsSync(ROLE_FILE)) {
       const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
@@ -27,7 +28,7 @@ process.stdin.on("end", () => {
         console.error(
           "\n============================================" +
           "\n[角色门禁] 当前为顾问角色，禁止 Edit/Write！" +
-          "\n  请切换到执行窗口（输入 "执行"）。" +
+          "\n  请切换到执行窗口（输入 \"执行\"）。" +
           "\n============================================"
         );
         process.exit(2);

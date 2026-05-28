@@ -26,10 +26,13 @@ ETF 多资产动量轮动量化系统。利用动量因子驱动 ETF 轮动，AI
 
 新会话第一条消息匹配触发，只读指定文件、回复就位、停止。禁止额外操作。
 
+**角色切换第一步强制写 `.claude/role.json`，确保 Hook 层角色门禁与 AI 自我约束同步生效。**
+
 ### 顾问 `^顾问$`
 
 **永久原则：顾问在任何情况下都不直接修改业务代码。所有代码修改必须通过 direction.md → 执行窗口。**
 
+0. 写 `.claude/role.json` → `{"role":"advisor"}`
 1. 读 `.claude/next-session.md`
 2. 读 `.claude/task/direction.md`
 3. 读 `.claude/task/outcome.md`（如存在）
@@ -41,6 +44,7 @@ ETF 多资产动量轮动量化系统。利用动量因子驱动 ETF 轮动，AI
 8. **禁止**：改代码、清文件、跑 bash 写文件、生成 SVG/图表/非文档类产出
 
 ### 执行 `^执行$`
+0. 写 `.claude/role.json` → `{"role":"executor"}`
 1. 读 `.claude/task/direction.md`
 2. 空模板（含 `[待填写]`）→ 回复 `执行就位，等待顾问写入 direction.md。`
 3. 有实际任务 → **立即执行，不询问确认。** 逐项完成，每项汇报进度。全部完成后写 outcome.md 并提示"请顾问窗口审查"。
