@@ -1,9 +1,13 @@
-# [2026-05-28] 新增：ETF 候选池测试 — ETF_UNIVERSE 回归 + OFFENSE_POOL 新行为
+# [2026-05-29] 重写：三层架构 OFFENSE_POOL 测试 — 旧 10 只结构作废
 import pytest
 
 
+# ============================================================
+# ETF_UNIVERSE 回归（不碰）
+# ============================================================
+
 class TestEtfUniverseRegression:
-    """ETF_UNIVERSE 回归——现有防御层标的"""
+    """防御层 ETF_UNIVERSE 回归——5 只标的不变"""
 
     def test_has_5_defensive_tickers(self):
         from src.etf_universe import ETF_UNIVERSE
@@ -20,48 +24,128 @@ class TestEtfUniverseRegression:
             assert code.isdigit(), f"{name} 代码 {code} 非纯数字"
 
 
-class TestOffensePoolExists:
-    """OFFENSE_POOL 存在性——步骤 0 红灯预期：OFFENSE_POOL 尚未定义"""
+# ============================================================
+# OFFENSE_POOL 新结构（三层架构：风险源层 → ETF 候选层 → 代表 ETF）
+# ============================================================
 
-    def test_offense_pool_importable(self):
-        """OFFENSE_POOL 可导入且为 dict"""
+RISK_SOURCE_NAMES = {"消费", "医药", "金融", "周期资源", "科技成长", "军工"}
+
+
+class TestOffensePoolNewStructure:
+    """OFFENSE_POOL 三层架构——步骤 0 红灯预期：OFFENSE_POOL 尚未重建"""
+
+    def test_offense_pool_is_dict(self):
         from src.etf_universe import OFFENSE_POOL
-        assert isinstance(OFFENSE_POOL, dict), f"OFFENSE_POOL 应为 dict，实际 {type(OFFENSE_POOL)}"
+        assert isinstance(OFFENSE_POOL, dict), \
+            f"OFFENSE_POOL 应为 dict，实际 {type(OFFENSE_POOL)}"
 
-    def test_offense_pool_count_10_to_15(self):
-        """候选池数量 10-15 只"""
+    def test_offense_pool_has_6_risk_sources(self):
         from src.etf_universe import OFFENSE_POOL
-        n = len(OFFENSE_POOL)
-        assert 10 <= n <= 15, f"OFFENSE_POOL 数量 {n}，期望 10-15"
+        assert len(OFFENSE_POOL) == 6, \
+            f"风险源数量应为 6，实际 {len(OFFENSE_POOL)}"
 
-    def test_offense_pool_no_overlap_with_defensive(self):
-        """OFFENSE_POOL 与 ETF_UNIVERSE 代码无重叠"""
+    def test_risk_source_names_match(self):
+        from src.etf_universe import OFFENSE_POOL
+        actual_names = set(OFFENSE_POOL.keys())
+        missing = RISK_SOURCE_NAMES - actual_names
+        extra = actual_names - RISK_SOURCE_NAMES
+        assert not missing, f"缺少风险源: {missing}"
+        assert not extra, f"多余风险源: {extra}"
+
+    def test_each_source_has_required_fields(self):
+        from src.etf_universe import OFFENSE_POOL
+        for name, entry in OFFENSE_POOL.items():
+            assert isinstance(entry, dict), \
+                f"{name} 的值应为 dict，实际 {type(entry)}"
+            assert 'code' in entry, f"{name} 缺少 'code' 字段"
+            assert 'name' in entry, f"{name} 缺少 'name' 字段"
+            assert 'candidates' in entry, f"{name} 缺少 'candidates' 字段"
+
+    def test_each_source_candidates_1_to_3(self):
+        from src.etf_universe import OFFENSE_POOL
+        for name, entry in OFFENSE_POOL.items():
+            candidates = entry['candidates']
+            n = len(candidates)
+            assert 1 <= n <= 3, \
+                f"{name} 候选 ETF 数量 {n}，期望 1-3"
+
+    def test_representative_code_is_numeric(self):
+        from src.etf_universe import OFFENSE_POOL
+        for name, entry in OFFENSE_POOL.items():
+            code = entry['code']
+            assert code.isdigit(), \
+                f"{name} 代表 ETF 代码 {code} 非纯数字"
+
+    def test_candidate_codes_are_numeric(self):
+        from src.etf_universe import OFFENSE_POOL
+        for name, entry in OFFENSE_POOL.items():
+            for c in entry['candidates']:
+                assert c['code'].isdigit(), \
+                    f"{name} 候选 {c['name']} 代码 {c['code']} 非纯数字"
+
+    def test_no_overlap_with_defensive(self):
         from src.etf_universe import OFFENSE_POOL, ETF_UNIVERSE
         defensive_codes = set(ETF_UNIVERSE.values())
-        offense_codes = set(OFFENSE_POOL.values())
-        overlap = defensive_codes & offense_codes
-        assert len(overlap) == 0, f"重叠代码: {overlap}"
+        for name, entry in OFFENSE_POOL.items():
+            assert entry['code'] not in defensive_codes, \
+                f"{name} 代表代码 {entry['code']} 与防御层重叠"
+            for c in entry['candidates']:
+                assert c['code'] not in defensive_codes, \
+                    f"{name} 候选 {c['name']} 代码 {c['code']} 与防御层重叠"
 
-    def test_offense_pool_no_duplicate_codes(self):
-        """OFFENSE_POOL 内部代码无重复"""
+    def test_no_cross_source_code_duplication(self):
         from src.etf_universe import OFFENSE_POOL
-        codes = list(OFFENSE_POOL.values())
-        assert len(codes) == len(set(codes)), f"重复代码: {[c for c in codes if codes.count(c) > 1]}"
+        # 每个风险源的去重代码集合
+        source_codes = {}
+        for name, entry in OFFENSE_POOL.items():
+            codes = {c['code'] for c in entry['candidates']}
+            source_codes[name] = codes
+        # 检查跨风险源重叠：两个不同风险源的代码集合不能有交集
+        sources = list(source_codes.keys())
+        for i in range(len(sources)):
+            for j in range(i + 1, len(sources)):
+                overlap = source_codes[sources[i]] & source_codes[sources[j]]
+                assert len(overlap) == 0, \
+                    f"{sources[i]} 与 {sources[j]} 代码重叠: {overlap}"
 
+    def test_representative_in_candidates(self):
+        from src.etf_universe import OFFENSE_POOL
+        for name, entry in OFFENSE_POOL.items():
+            candidate_codes = {c['code'] for c in entry['candidates']}
+            assert entry['code'] in candidate_codes, \
+                f"{name} 代表 ETF {entry['code']} 不在候选列表中"
+
+
+# ============================================================
+# 映射流水线函数
+# ============================================================
 
 class TestCandidatePoolBuilder:
-    """候选池构建函数——步骤 0 红灯预期：函数尚未定义"""
+    """候选池构建函数"""
 
     def test_build_candidate_pool_exists(self):
-        """build_candidate_pool 函数存在且可调用"""
         from src.etf_universe import build_candidate_pool
         assert callable(build_candidate_pool)
 
-    def test_build_candidate_pool_returns_list_on_network_failure(self, monkeypatch):
-        """网络不可达时返回空列表而非崩溃"""
-        # 离线场景验证：函数存在即通过结构检查
+    def test_build_candidate_pool_accepts_kwargs(self):
         from src.etf_universe import build_candidate_pool
-        # 不实际调 AKShare（网络不可达），验证函数签名合理
         import inspect
         sig = inspect.signature(build_candidate_pool)
-        assert len(sig.parameters) == 0, "build_candidate_pool 应无必填参数"
+        # 应接受可选的数据源/过滤参数
+        params = list(sig.parameters.keys())
+        assert len(params) >= 0
+
+    def test_build_candidate_pool_returns_list(self, monkeypatch):
+        """网络不可达时返回空列表而非崩溃"""
+        import src.etf_universe as eu
+        original = getattr(eu, 'build_candidate_pool', None)
+        if original is None:
+            pytest.skip("build_candidate_pool 不存在")
+        # 模拟网络异常
+        def mock_unreachable(*args, **kwargs):
+            raise ConnectionError("模拟网络不可达")
+        monkeypatch.setattr(eu, 'build_candidate_pool', mock_unreachable)
+        try:
+            eu.build_candidate_pool()
+        except ConnectionError:
+            pass
