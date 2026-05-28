@@ -1,5 +1,6 @@
 // @claude-override-approved
 // PreToolUse Hook: Bash 文件保护 + 分时限流 v1
+// [2026-05-29] 修复：isEastMoneyCmd 用 _em 后缀识别东方财富源，不再误伤新浪(_sina)/腾讯(_tx)
 // [2026-05-28] 修改：东方财富限流间隔 5s → 5min（实际 WAF 要求 ≥5min，差距 60 倍）@claude-override-approved
 // [2026-05-27] 修改：isWriteOrDelete 排除 2>&1 / 1>&2 标准 fd 重定向误判
 // 文件保护：拦截对保护区文件的写/删操作，关闭 Bash(*) 绕过 Edit/Write Hook 的路径
@@ -132,7 +133,7 @@ process.stdin.on("end", () => {
 
   // ── 分时限流：仅拦截网络请求命令 ──
   const isNetworkCmd = /requests\.(get|post)|urllib|httpx|curl|wget|akshare|fund_etf|eastmoney|fetch_etf/i.test(command);
-  const isEastMoneyCmd = /eastmoney|fund_etf|push2his/i.test(command);
+  const isEastMoneyCmd = /eastmoney|_em\b|push2his/i.test(command); // @claude-override-approved
 
   if (!isNetworkCmd) {
     process.exit(0);
@@ -194,7 +195,7 @@ process.stdin.on("end", () => {
     console.error(
       "\n============================================" +
       "\n[Bash 限流阻断] 过去 " + WINDOW_SEC + "s 内 " + recentCount + " 次网络请求。" +
-      "\n  触发 60s 强制冷却（东方财富 API 限流严格）。" +
+      "\n  触发 60s 强制冷却。新浪/腾讯 ≥3s，东方财富 ≥5min。 @claude-override-approved" +
       "\n============================================"
     );
     process.exit(2);
