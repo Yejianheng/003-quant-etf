@@ -10,6 +10,33 @@
 
 ### 步骤
 
+#### 步骤 0：建测试文件 + 跑红灯（强制第一关）
+
+**修改文件**：新增 `tests/test_etf_universe.py`（测试文件，不修改任何业务代码）
+
+该步骤不涉及任何 `src/` 修改。先写测试，跑，必须全红（因为 OFFENSE_POOL 尚不存在）。
+
+**测试场景清单**：
+
+```
+基础路径：
+  - ETF_UNIVERSE 含 5 只防御标的，代码-名称映射正确
+  - ETF_UNIVERSE 所有代码可转为纯数字（可拼接 API 请求）
+  - OFFENSE_POOL 存在且为 dict（暂未定义 → 预期 ImportError/AttributeError）
+
+边界：
+  - OFFENSE_POOL 数量 10-15 只（暂未定义 → 预期失败）
+  - OFFENSE_POOL 与 ETF_UNIVERSE 代码无重叠
+  - OFFENSE_POOL 内部代码无重复
+
+异常：
+  - 网络不可达时候选池构建函数返回空列表而非崩溃（暂未定义函数 → 预期失败）
+```
+
+**验收（步骤 0 必须全红）**：
+- [ ] `python -m pytest tests/test_etf_universe.py -v` — **预期 0 passed, N failed**（OFFENSE_POOL 不存在）
+- [ ] 禁止跳过红灯：全绿 = 测试有鬼 = 必须解释并重写
+
 #### 步骤 1：获取全市场 ETF 列表
 
 用 AKShare 获取 A 股 ETF 清单，筛选股票型行业 ETF：
@@ -71,11 +98,12 @@ df = ak.fund_etf_category_sina(symbol="ETF基金")
 
 ### 验收标准
 
+- [ ] `tests/test_etf_universe.py` 存在且全绿（含 ETF_UNIVERSE 回归 + OFFENSE_POOL 新行为）
 - [ ] `src/etf_universe.py` 含 `OFFENSE_POOL` 字典（10-15 只，含代码+名称）
 - [ ] 所有候选 ETF 数据已拉取并存为 parquet，含 > 1000 行
 - [ ] 防御+进攻联合回测跑通，进攻层产生非零持仓
 - [ ] 联合 vs 纯防御对比表：Sharpe 不恶化，收益有提升或持平
-- [ ] 全量测试 84 passed / 3 skipped（零回归）
+- [ ] 全量测试 84+ passed / 3 skipped（零回归）
 
 ---
 
