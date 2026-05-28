@@ -3,12 +3,13 @@
   "_自保护": "protected-files.json、protected-contracts.json、check_values.py 自身也在保护区内，防止攻击者先改清单再改核心文件。",
   "_Bash保护": "pre_bash.js 硬保护 .claude/hooks/ 和 .claude/.gate/ 目录，Bash 不可写/删。",
   "protected_files": [
+    "方向性讨论.md",
     "src/config.py",
     ".claude/settings.json",
     "protected-files.json",
     "protected-contracts.json",
     "check_values.py"
-  ],
+  ]@claude-override-approved,
   "protected_dirs": [
     "prompts/",
     ".claude/rules/",
