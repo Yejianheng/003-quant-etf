@@ -1,5 +1,6 @@
 // @claude-override-approved
 // PreToolUse Hook: Bash 文件保护 + 分时限流 v1
+// [2026-05-28] 修改：东方财富限流间隔 5s → 5min（实际 WAF 要求 ≥5min，差距 60 倍）@claude-override-approved
 // [2026-05-27] 修改：isWriteOrDelete 排除 2>&1 / 1>&2 标准 fd 重定向误判
 // 文件保护：拦截对保护区文件的写/删操作，关闭 Bash(*) 绕过 Edit/Write Hook 的路径
 // 分时限流：AKShare/东方财富 API 限流 — 滑动窗口 + 会话预算 + 强制冷却
@@ -11,7 +12,7 @@ const path = require("path");
 
 const STATE_FILE = path.join(__dirname, "..", ".gate", "rate_limit.json");
 const MIN_INTERVAL_MS = 3000;
-const EASTMONEY_INTERVAL_MS = 5000;
+const EASTMONEY_INTERVAL_MS = 300000; // @claude-override-approved
 const WINDOW_SEC = 60;
 const COOLDOWN_60S = 60000;
 const COOLDOWN_120S = 120000;
@@ -147,7 +148,7 @@ process.stdin.on("end", () => {
       "\n============================================" +
       "\n[Bash 限流冷却] 因频繁请求触发强制冷却。" +
       "\n  剩余 " + remain + "s，已触发 " + (state.cooldowns || 0) + " 次冷却。" +
-      "\n  东方财富 API 建议间隔 ≥5s，冷却期禁止所有网络命令。" +
+      "\n  东方财富 API 建议间隔 ≥5min，冷却期禁止所有网络命令。 @claude-override-approved" +
       "\n============================================"
     );
     process.exit(2);
