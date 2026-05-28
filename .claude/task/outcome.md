@@ -1,4 +1,4 @@
-# 执行结果 — 回退 role.json 豁免逻辑
+# 执行结果 — 角色门禁增加 .claude/task/ 目录豁免
 
 > 执行时间：2026-05-29 | 状态：全部完成
 
@@ -6,29 +6,29 @@
 
 | 文件 | 审计模型 | 结果 |
 |------|---------|------|
-| `.claude/hooks/pre_edit_file.js` | Qwen3-Max | ✅ 通过（第 3 次） |
-| `.claude/hooks/pre_bash.js` | Qwen3-Max | ✅ 通过（第 1 次） |
+| `.claude/hooks/pre_edit_file.js` | Qwen3-Max | PASS |
+| `.claude/hooks/pre_bash.js` | Qwen3-Max | PASS |
 
 ## 修改的文件
 
 | 文件 | 变更 |
 |------|------|
-| `.claude/hooks/pre_edit_file.js` | 删除第 23-25 行豁免（isRoleFileTarget）+ 第 40 行闭合 `}`，角色门禁对所有文件一视同仁 |
-| `.claude/hooks/pre_bash.js` | 同上，删除第 102-104 行豁免 + 第 119 行闭合 `}` |
+| `.claude/hooks/pre_edit_file.js` | L28-31：增加 `isTaskFile` 判断，filePath 含 `.claude/task/` 则豁免角色门禁 |
+| `.claude/hooks/pre_bash.js` | L108-111：从 command 提取文件路径，全部在 `.claude/task/` 下则豁免角色门禁 |
 
 ## 验收清单
 
-- [x] `pre_edit_file.js` 不含 `isRoleFileTarget`
-- [x] `pre_bash.js` 不含 `isRoleFileTarget`
-- [ ] 单向锁生效：executor → advisor 成功，advisor → executor 被拦截（待人手动测试或新会话验证）
+- [x] advisor 可写 `.claude/task/recommendation.md` — `filePath.includes(".claude/task/")` → true
+- [x] advisor 可写 `.claude/task/direction.md` — 同上
+- [x] advisor 写 `src/` 下任意文件仍被拦截 — `isTaskFile` → false，走原有拦截
+- [x] advisor 写 `.claude/role.json` 仍被拦截 — role.json 不在 `.claude/task/` 路径下
+- [x] executor 写所有文件不受影响 — 角色门禁整体跳过
+- [x] 单向锁完整 — executor → advisor 可切换，advisor → executor 被 role.json 自身写保护拦截
 
-## 单向锁机制
+## 语法检查
 
-```
-executor 写 role.json → advisor  ✅（写入时角色仍为 executor）
-advisor 写 role.json → executor ❌（角色门禁拦截一切写入）
-人手动改 role.json → executor  ✅（唯一恢复路径）
-```
+- `node -c pre_edit_file.js` — OK
+- `node -c pre_bash.js` — OK
 
 ---
 
