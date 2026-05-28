@@ -1,9 +1,15 @@
 {
-  "_说明": "内容级保护清单 — Hook PostToolUse 读取。values = 已确认的常量不许改；patterns = 禁止出现的写法。",
+  "_说明": "内容级保护清单 — Hook PostToolUse 读取。values = 已确认的常量不许改；patterns = 禁止出现的写法；offense_pool = 进攻层候选池结构校验（方向性讨论硬约束）。",
   "values": [
     {"file": "[文件路径]", "key": "[常量名]", "value": "[值]", "reason": "[原因]"}
   ],
-  "patterns": [
-    {"pattern": "[正则表达式]", "reason": "[原因]"}
-  ]
+  "patterns": [],
+  "offense_pool": {
+    "file": "src/etf_universe.py",
+    "_说明": "方向性讨论 — 进攻层三层架构硬约束：6 类固定风险源，每类 1-3 只候选 ETF，不与防御层重叠。",
+    "required_sources": ["消费", "医药", "金融", "周期资源", "科技成长", "军工"],
+    "min_candidates": 1,
+    "max_candidates": 3,
+    "defensive_var": "ETF_UNIVERSE"
+  }
 }

@@ -53,6 +53,93 @@ def check_patterns(target: str, contracts: dict) -> list[str]:
     return violations
 
 
+def check_offense_pool(target: str, contracts: dict) -> list[str]:
+    """校验 src/etf_universe.py 的 OFFENSE_POOL 符合方向性讨论三层架构硬约束"""
+    pool_cfg = contracts.get("offense_pool", {})
+    target_file = pool_cfg.get("file", "")
+    if os.path.basename(target) != os.path.basename(target_file):
+        return []
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except SyntaxError:
+        return ["[AST错误] 无法解析 etf_universe.py"]
+    violations = []
+
+    # 查找 OFFENSE_POOL 和 ETF_UNIVERSE 的 AST 节点
+    offense_assign = None
+    defense_assign = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "OFFENSE_POOL":
+                    offense_assign = node
+                if isinstance(t, ast.Name) and t.id == pool_cfg.get("defensive_var", "ETF_UNIVERSE"):
+                    defense_assign = node
+
+    if offense_assign is None:
+        return ["[OFFENSE_POOL] 在 etf_universe.py 中未找到"]
+
+    # 提取 OFFENSE_POOL 字典
+    try:
+        pool = ast.literal_eval(offense_assign.value)
+    except (ValueError, TypeError):
+        return ["[OFFENSE_POOL] 无法解析为静态字典，禁止使用变量拼接"]
+
+    if not isinstance(pool, dict):
+        return [f"[OFFENSE_POOL] 必须为 dict，实际为 {type(pool).__name__}"]
+
+    required = pool_cfg.get("required_sources", [])
+    min_c = pool_cfg.get("min_candidates", 1)
+    max_c = pool_cfg.get("max_candidates", 3)
+
+    # 检查风险源名称完全匹配
+    actual_sources = set(pool.keys())
+    expected_sources = set(required)
+    if actual_sources != expected_sources:
+        missing = expected_sources - actual_sources
+        extra = actual_sources - expected_sources
+        if missing:
+            violations.append(f"[OFFENSE_POOL] 缺少风险源: {missing}")
+        if extra:
+            violations.append(f"[OFFENSE_POOL] 多余风险源: {extra}")
+
+    # 检查每风险源结构
+    all_offense_codes = set()
+    for source_name in actual_sources:
+        entry = pool.get(source_name, {})
+        if not isinstance(entry, dict):
+            violations.append(f"[OFFENSE_POOL] {source_name}: 值必须为 dict，实际 {type(entry).__name__}")
+            continue
+        code = entry.get("code", "")
+        candidates = entry.get("candidates", [])
+        if not isinstance(code, str) or not code.isdigit():
+            violations.append(f"[OFFENSE_POOL] {source_name}: code 必须为纯数字字符串")
+        if not isinstance(candidates, list):
+            violations.append(f"[OFFENSE_POOL] {source_name}: candidates 必须为 list")
+        else:
+            n = len(candidates)
+            if n < min_c or n > max_c:
+                violations.append(f"[OFFENSE_POOL] {source_name}: candidates 数量 {n}，要求 {min_c}-{max_c}")
+            for c in candidates:
+                if isinstance(c, str) and c.isdigit():
+                    all_offense_codes.add(c)
+
+    # 检查与防御层重叠
+    if defense_assign is not None:
+        try:
+            defense = ast.literal_eval(defense_assign.value)
+            if isinstance(defense, dict):
+                defense_codes = set(v for v in defense.values() if isinstance(v, str) and v.isdigit())
+                overlap = all_offense_codes & defense_codes
+                if overlap:
+                    violations.append(f"[OFFENSE_POOL] 候选 ETF 代码与 ETF_UNIVERSE 重叠: {overlap}")
+        except (ValueError, TypeError):
+            pass
+
+    return violations
+
+
 def check_ast_constants(target: str, contracts: dict) -> list[str]:
     basename = os.path.basename(target)
     if not basename.endswith(".py"):
@@ -102,6 +189,7 @@ def main():
     violations.extend(check_values(target, contracts))
     violations.extend(check_patterns(target, contracts))
     violations.extend(check_ast_constants(target, contracts))
+    violations.extend(check_offense_pool(target, contracts))
     if violations:
         for v in violations:
             print(v)
