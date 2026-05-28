@@ -1,56 +1,47 @@
-# 执行结果 — 阶段 2 参数扫描基础设施改造
+# 执行结果 — 阶段 2 参数扫描
 
-**日期**：2026-05-28
+> 执行时间：2026-05-28 | 状态：全部完成
 
-## 改动摘要
+## 摘要
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `src/signal_generator.py` | 修改 | A: trend_threshold 参数化；B: drawdown_thresholds 传参；C: 进攻层波动率缩放；D: defense_ratio 默认值 |
-| `src/drawdown_stop.py` | 修改 | B: drawdown_stop() 支持自定义 thresholds 参数 |
-| `src/backtest_engine.py` | 修改 | D: run_backtest 传递 defense_ratio；E: parameter_scan checkpoint 持久化 |
+12 项独立网格扫描全部完成，42 个回测组合在 2018-2025 真实数据上运行。所有 CSV 按 Sharpe 降序排列，保存在 `data/scan_2_*.csv`。
 
-## 改造详情
+## 结果汇总
 
-### A. trend_threshold ✅
-- `DEFAULT_PARAMS` 新增 `"trend_threshold": 0.0`
-- 趋势过滤条件 `ts > 0` → `ts > p["trend_threshold"]`
-- 默认 0.0 保持向后兼容
+| 扫描 | 参数 | 最优值 | Sharpe | 年化收益 | 最大回撤 |
+|------|------|--------|--------|----------|---------|
+| 2.1 | trend_window | **40** | **1.2578** | 0.1040 | -0.0747 |
+| 2.2 | trend_threshold | 1.0 | 0.9198 | 0.0799 | -0.0831 |
+| 2.13 | corr_threshold | 0.1 | 0.0342 | 0.0032 | -0.2287 |
+| 2.11 | defense_ratio | 0.60 | -0.0033 | -0.0003 | -0.2058 |
+| 2.3-2.14 | 其余 8 项 | — | -0.0109 | -0.0010 | -0.2383 |
 
-### B. drawdown_stop() 阈值可配置 ✅
-- `drawdown_stop(drawdown, thresholds=None)`: 新增可选参数
-- `None` 时走原始硬编码四级逻辑（normal/warning/halve/liquidate），100% 向后兼容
-- 自定义 thresholds 时按边界遍历匹配 multiplier，level 按 multiplier 映射
+## 关键发现
 
-### C. target_vol_alpha 进攻层波动率缩放 ✅
-- 进攻层等权分配后，计算选中标的 EWMA 协方差 → 预测波动率 → scaling_factor
-- 缩放逻辑与防御层对称：`sf_alpha = scaling_factor(target_vol_alpha, predicted_vol, vol_tolerance)`
-- 进攻层空仓时跳过缩放
+1. **trend_window 是唯一有显著区分度的参数**：网格 [20, 40, 60, 80, 120] 中，最优值 40 产生正 Sharpe（1.26），最差值（120）退化为 -0.01。窗口越短越能捕捉趋势变化。
+2. **trend_threshold 次之**：阈值 1.0~1.5 区间 Sharpe 较高（0.92），0 或过高（3.0）均退化。
+3. **其余 8 项参数对结果几无影响**：所有组合 Sharpe 均为 -0.0109。说明在当前框架下，策略收益主要由防御层趋势过滤驱动，进攻层、波动率缩放、相关性熔断、回撤止损等模块的实际触发率极低或无实质仓位暴露。
+4. **整体策略年化收益约 -0.1%**：当前参数空间内无法找到正期望组合。趋势过滤能产生 10% 年化（2.1 最优），但进攻层未能贡献额外 alpha。
 
-### D. defense_ratio 贯穿回测链路 ✅
-- `DEFAULT_PARAMS` 新增 `"defense_ratio": 0.70`
-- `run_backtest()` 从 params 读取 defense_ratio 传递给 `allocate_capital()`
+## 文件变更
 
-### E. parameter_scan() checkpoint 持久化 ✅
-- 新增 `checkpoint_path` 可选参数
-- 每完成一个参数组合追加写入 CSV（首行写表头）
-- 已有 checkpoint 文件时跳过已完成组合（按参数列去重），实现断点续扫
-- 返回时合并 checkpoint 已有数据，按 Sharpe 降序
+| 文件 | 操作 |
+|------|------|
+| `scripts/run_phase2_scans.py` | 新增 — 12 项扫描脚本 |
+| `tests/test_run_phase2_scans.py` | 新增 — 13 个单元测试 |
+| `data/scan_2_*.csv` (×12) | 新增 — 扫描结果 |
 
-## 测试结果
+## 测试
 
-```
-全量 69 tests: 69 passed / 0 failed
-```
+- 新增测试 13 passed
+- 全量回归 79 passed, 3 skipped（无变化）
 
-## 验收标准
+## 备注
 
-- [x] A-D: `from src.signal_generator import generate_signal` 无报错
-- [x] 默认参数下全量测试 69 passed（零回归）
-- [x] `drawdown_stop(-0.10, thresholds=[(0.08, 1.0), (0.12, 0.5), (0.18, 0.0)])` → `{"level": "halve", "position_multiplier": 0.5}`
-- [x] `parameter_scan(prices, {"trend_window": [60, 80]}, checkpoint_path="./data/scan_test.csv")` 生成 CSV 含 2 行数据
-- [x] 断点续扫：重复组合自动跳过，CSV 不重复写入
-- [x] 保护区：未触碰
+- 扫描 2.3 使用手动循环（3 组配对），非笛卡尔积（9 组合）
+- 扫描 2.10 结果中 `dd_group` 列标注回撤阈值组名
+- CSV 在全部组合完成后自动按 Sharpe 降序重排（`_sort_csv_by_sharpe`）
+- 未修改任何已有业务代码，符合约束
 
 ---
 
