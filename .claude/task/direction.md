@@ -37,15 +37,34 @@
 - [ ] `python -m pytest tests/test_etf_universe.py -v` — **预期 0 passed, N failed**（OFFENSE_POOL 不存在）
 - [ ] 禁止跳过红灯：全绿 = 测试有鬼 = 必须解释并重写
 
+#### 步骤 0.5：API 字段探查（5 分钟，决定粗筛路径）
+
+不写业务代码，只跑一次 API 看返回字段：
+
+```python
+import akshare as ak
+df = ak.fund_etf_category_sina(symbol="ETF基金")
+print(df.columns.tolist())
+print(df.head(2).to_string())
+```
+
+**判断逻辑**：
+- 有基金类型列 → 走新浪路径，步骤 1.5 类型一刀切可用
+- 无基金类型列 → 切换东方财富 `ak.fund_etf_fund_info_em()`（字段全但限流严重，只拉一次列表即可）
+
+结果写入 outcome.md，决定后续步骤走哪条数据源。
+
 #### 步骤 1：获取全市场 ETF 列表
 
-**数据源优先级**：新浪 → 东方财富（仅新浪不可达时启用，东方财富限流严重。）
+根据步骤 0.5 探查结果选择数据源：
 
 ```python
 import akshare as ak
 # 新浪源优先（东方财富 K 线 API 限流 ~1-2 次/分钟，不可依赖）
 df = ak.fund_etf_category_sina(symbol="ETF基金")
 ```
+
+备选：`ak.fund_etf_fund_info_em()`（仅当新浪缺关键字段时启用，只拉一次）
 
 #### 步骤 1.5：粗筛过滤（减少后续精细筛选压力）
 
