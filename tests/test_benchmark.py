@@ -1,3 +1,4 @@
+# [2026-05-28] 新增：test_single_benchmark — 单标的买入持有
 # [2026-05-27] 新增：基准计算测试 — 2 场景
 
 import numpy as np
@@ -81,3 +82,57 @@ class TestCustomWeights:
         assert not np.allclose(nav_default.values, nav_equal.values), (
             "等权与默认权重结果应不同"
         )
+
+
+class TestSingleBenchmark:
+    """场景 3：单标的买入持有净值计算。"""
+
+    def test_single_benchmark(self):
+        """compute_single_benchmark 返回起始 1.0 的净值 Series。"""
+        from src.benchmark import compute_single_benchmark
+
+        # 模拟沪深300 价格：10 天单边上涨
+        dates = pd.date_range("2024-01-01", periods=10, freq="B")
+        close = pd.Series(np.linspace(1.0, 1.1, 10), index=dates)
+        prices = {"沪深300": pd.DataFrame({
+            "open": close * 0.99,
+            "high": close * 1.02,
+            "low": close * 0.98,
+            "close": close,
+            "volume": np.full(10, 1e6),
+        }, index=dates)}
+
+        nav = compute_single_benchmark(prices, "沪深300")
+        assert nav.iloc[0] == pytest.approx(1.0, rel=1e-6), "起始净值应为 1.0"
+        assert nav.iloc[-1] == pytest.approx(1.1, rel=1e-6), "最终净值 = 1.1/1.0 = 1.1"
+        assert len(nav) == 10
+
+    def test_single_benchmark_missing_name(self):
+        """标的不存在时返回 None。"""
+        from src.benchmark import compute_single_benchmark
+
+        dates = pd.date_range("2024-01-01", periods=5, freq="B")
+        close = pd.Series([1.0, 1.01, 1.02, 1.03, 1.04], index=dates)
+        prices = {"沪深300": pd.DataFrame({
+            "open": close * 0.99, "high": close * 1.02,
+            "low": close * 0.98, "close": close, "volume": np.full(5, 1e6),
+        }, index=dates)}
+
+        result = compute_single_benchmark(prices, "不存在的标的")
+        assert result is None
+
+    def test_single_benchmark_monotonic(self):
+        """单边上涨时净值单调递增。"""
+        from src.benchmark import compute_single_benchmark
+
+        dates = pd.date_range("2024-01-01", periods=30, freq="B")
+        r = np.full(30, 0.001)
+        close = 1.0 * np.exp(np.cumsum(r))
+        prices = {"纳指": pd.DataFrame({
+            "open": close * 0.99, "high": close * 1.02,
+            "low": close * 0.98, "close": close, "volume": np.full(30, 1e6),
+        }, index=dates)}
+
+        nav = compute_single_benchmark(prices, "纳指")
+        assert nav is not None
+        assert (nav.diff().dropna() > 0).all(), "单边上涨时净值应单调递增"

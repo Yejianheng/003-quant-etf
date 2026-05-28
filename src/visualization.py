@@ -1,3 +1,4 @@
+# [2026-05-28] 新增：三基准线（沪深300/创业板/纳指）渲染到 NAV 图表
 # [2026-05-27] 修复：回撤图去掉 reverse:true（负值应向下）
 # [2026-05-27] 修复：benchmark 同起点归一化
 # [2026-05-27] 修复：NAV 归一化 + benchmark 日期对齐 + Calmar 格式
@@ -30,9 +31,22 @@ def generate_report(result: dict, output_path: str = "./reports/backtest_report.
         if bench_aligned.isna().any():
             bench_aligned = bench_aligned.ffill()
         bench_list = (bench_aligned / bench_aligned.iloc[0]).tolist()
+
+        # 三基准对齐
+        def _align_benchmark(series, idx):
+            if series is None or len(series) == 0:
+                return []
+            aligned = series.reindex(idx)
+            if aligned.isna().any():
+                aligned = aligned.ffill()
+            return (aligned / aligned.iloc[0]).tolist()
+
+        bench_300_list = _align_benchmark(result.get("benchmark_300"), records_df.index)
+        bench_chinext_list = _align_benchmark(result.get("benchmark_chinext"), records_df.index)
+        bench_nasdaq_list = _align_benchmark(result.get("benchmark_nasdaq"), records_df.index)
     else:
         dates, nav_list, drawdown_list = [], [], []
-        bench_list = []
+        bench_list, bench_300_list, bench_chinext_list, bench_nasdaq_list = [], [], [], []
 
     # 标量指标
     def pct(v):
@@ -101,6 +115,9 @@ h1 {{ text-align: center; margin-bottom: 24px; font-size: 22px; }}
 const dates = {json.dumps(dates)};
 const navData = {json.dumps(nav_list)};
 const benchData = {json.dumps(bench_list)};
+const bench300Data = {json.dumps(bench_300_list)};
+const benchChinextData = {json.dumps(bench_chinext_list)};
+const benchNasdaqData = {json.dumps(bench_nasdaq_list)};
 const ddData = {json.dumps(drawdown_list)};
 
 const blue = '#3366cc';
@@ -125,7 +142,7 @@ if (dates.length > 0) {{
           tension: 0.1,
         }},
         {{
-          label: '基准净值',
+          label: '基准净值(5ETF篮子)',
           data: benchData,
           borderColor: orange,
           borderWidth: 1.5,
@@ -133,6 +150,36 @@ if (dates.length > 0) {{
           fill: false,
           tension: 0.1,
           borderDash: [5, 3],
+        }},
+        {{
+          label: '沪深300',
+          data: bench300Data,
+          borderColor: '#ff6384',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.1,
+          borderDash: [2, 2],
+        }},
+        {{
+          label: '创业板',
+          data: benchChinextData,
+          borderColor: '#36a2eb',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.1,
+          borderDash: [2, 2],
+        }},
+        {{
+          label: '纳指',
+          data: benchNasdaqData,
+          borderColor: '#4bc0c0',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.1,
+          borderDash: [2, 2],
         }},
       ],
     }},

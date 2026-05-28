@@ -10,7 +10,7 @@ import pandas as pd
 from src.signal_generator import generate_signal
 from src.portfolio_manager import allocate_capital
 from src.recorder import init_recorder, record_daily, get_records_df
-from src.benchmark import compute_benchmark
+from src.benchmark import compute_benchmark, compute_single_benchmark
 
 
 def run_backtest(
@@ -112,9 +112,16 @@ def run_backtest(
     final_benchmark_nav = float(benchmark_nav.iloc[-1])
     benchmark_return = final_benchmark_nav - 1.0
 
+    benchmark_300 = compute_single_benchmark(prices, "沪深300")
+    benchmark_chinext = compute_single_benchmark(prices, "创业板")
+    benchmark_nasdaq = compute_single_benchmark(prices, "纳指")
+
     return {
         "records_df": records_df,
         "benchmark_nav": benchmark_nav,
+        "benchmark_300": benchmark_300,
+        "benchmark_chinext": benchmark_chinext,
+        "benchmark_nasdaq": benchmark_nasdaq,
         "final_nav": final_nav,
         "final_benchmark_nav": final_benchmark_nav,
         "total_return": total_return,

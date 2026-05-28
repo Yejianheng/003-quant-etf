@@ -1,3 +1,4 @@
+# [2026-05-28] 新增：test_three_benchmarks — 验证 run_backtest 返回三条新基准
 # [2026-05-27] 新增：回测引擎测试 — 3 场景
 
 import numpy as np
@@ -171,3 +172,31 @@ class TestParameterScan:
         for key in ["final_nav", "total_return", "annual_return", "max_drawdown"]:
             assert key in results[0], f"结果应包含 {key}"
             assert key in results[1], f"结果应包含 {key}"
+
+
+class TestThreeBenchmarks:
+    """场景 4：run_backtest 返回三基准（沪深300/创业板/纳指买入持有）。"""
+
+    def test_three_benchmarks(self):
+        prices = _make_bull_prices(n=200)
+        result = run_backtest(prices, initial_capital=1_000_000, min_days=120)
+
+        for key in ["benchmark_300", "benchmark_chinext", "benchmark_nasdaq"]:
+            assert key in result, f"返回值应包含 {key}"
+
+        # 三基准应为 Series，起始值 1.0
+        b300 = result["benchmark_300"]
+        assert b300 is not None
+        assert b300.iloc[0] == 1.0
+        assert len(b300) == 200
+
+        b_chinext = result["benchmark_chinext"]
+        assert b_chinext is not None
+        assert b_chinext.iloc[0] == 1.0
+
+        b_nasdaq = result["benchmark_nasdaq"]
+        assert b_nasdaq is not None
+        assert b_nasdaq.iloc[0] == 1.0
+
+        # 现有 benchmark_nav 不应被删除
+        assert "benchmark_nav" in result

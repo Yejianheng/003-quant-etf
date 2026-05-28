@@ -1,3 +1,4 @@
+# [2026-05-28] 新增：compute_single_benchmark — 单标的买入持有净值
 # [2026-05-27] 新增：基准计算 — 买入持有基准组合净值曲线
 
 import numpy as np
@@ -50,4 +51,22 @@ def compute_benchmark(
     nav.loc[basket_return.index] = nav_values
     nav.name = "benchmark_nav"
 
+    return nav
+
+
+def compute_single_benchmark(
+    prices: dict[str, pd.DataFrame],
+    name: str,
+) -> pd.Series | None:
+    """计算单个标的的买入持有净值曲线（起始值 1.0）。
+
+    prices: {标的名: OHLCV DataFrame}。
+    name: 目标标的名称。
+    返回: 净值 Series（index=DatetimeIndex, 起始=1.0），标的不存在返回 None。
+    """
+    if name not in prices:
+        return None
+    close = prices[name]["close"]
+    nav = close / close.iloc[0]
+    nav.name = f"benchmark_{name}"
     return nav

@@ -105,3 +105,26 @@ class TestGenerateReport:
             path = os.path.join(out_dir, "report.html")
             generate_report(sample_result, output_path=path)
             assert os.path.exists(path)
+
+    def test_html_contains_three_benchmarks(self, sample_result):
+        """新增三基准后 HTML 应包含沪深300/创业板/纳指标签。"""
+        from src.visualization import generate_report
+
+        # 构造三基准数据
+        dates = sample_result["records_df"].index
+        n = len(dates)
+        rng = np.random.default_rng(99)
+        sample_result["benchmark_300"] = pd.Series(
+            1.0 * (1 + rng.normal(0.0002, 0.008, n)).cumprod(), index=dates)
+        sample_result["benchmark_chinext"] = pd.Series(
+            1.0 * (1 + rng.normal(0.0003, 0.015, n)).cumprod(), index=dates)
+        sample_result["benchmark_nasdaq"] = pd.Series(
+            1.0 * (1 + rng.normal(0.0003, 0.012, n)).cumprod(), index=dates)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "report.html")
+            generate_report(sample_result, output_path=path)
+            html = open(path, encoding="utf-8").read()
+            assert "沪深300" in html
+            assert "创业板" in html
+            assert "纳指" in html
