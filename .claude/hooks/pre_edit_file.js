@@ -18,6 +18,23 @@ process.stdin.on("end", () => {
   const newStr = (toolInput.new_string || toolInput.content || "");
   const filePath = (toolInput.file_path || "").replace(/\\/g, "/");
 
+  // ── 角色门禁：顾问角色禁止所有 Edit/Write ── @claude-override-approved
+  const ROLE_FILE = path.join(__dirname, "..", ".gate", "role.json");
+  try {
+    if (fs.existsSync(ROLE_FILE)) {
+      const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
+      if (roleData.role === "advisor" || roleData.role === "consultant") {
+        console.error(
+          "\n============================================" +
+          "\n[角色门禁] 当前为顾问角色，禁止 Edit/Write！" +
+          "\n  请切换到执行窗口（输入 "执行"）。" +
+          "\n============================================"
+        );
+        process.exit(2);
+      }
+    }
+  } catch (_) {}
+
   // ── 新会话 Git 门禁（同一 session 只检查一次）──
   const gateDir = path.join(__dirname, "..", ".gate");
   const gateFile = path.join(gateDir, sessionId);

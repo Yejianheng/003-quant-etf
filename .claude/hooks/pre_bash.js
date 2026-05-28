@@ -97,6 +97,23 @@ process.stdin.on("end", () => {
   const toolInput = payload.tool_input || {};
   const command = toolInput.command || "";
 
+  // ── 角色门禁：顾问角色禁止所有 Bash 操作 ── @claude-override-approved
+  const ROLE_FILE = path.join(__dirname, "..", ".gate", "role.json");
+  try {
+    if (fs.existsSync(ROLE_FILE)) {
+      const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
+      if (roleData.role === "advisor" || roleData.role === "consultant") {
+        console.error(
+          "\n============================================" +
+          "\n[角色门禁] 当前为顾问角色，禁止 Bash 操作！" +
+          "\n  请切换到执行窗口（输入 \"执行\"）。" +
+          "\n============================================"
+        );
+        process.exit(2);
+      }
+    }
+  } catch (_) {}
+
   // ── 文件保护（所有 Bash 命令优先检查）──
   if (isWriteOrDelete(command)) {
     const JSON_PATH = path.join(process.cwd(), "protected-files.json");
