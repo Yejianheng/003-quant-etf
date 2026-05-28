@@ -2,104 +2,135 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 当前任务：阶段 2 参数扫描 — 基础设施准备
+## 当前任务：阶段 2 参数扫描 — 12 项独立网格扫描
 
 ### 背景
 
-回测引擎已跑通真实数据，但默认参数下绩效极差（Sharpe -0.01，最大回撤 -23.83% 超 20% 硬约束）。`parameter_scan()` 入口已存在，但 4 个硬编码参数阻塞全部 16 项扫描。本次任务**只做基础设施改造**，不跑实际扫描。
+基础设施改造（v1-20260528-36）已将全部阻塞参数开放。现在在真实数据上跑 12 项独立参数扫描（阶段 2 中 2.5/2.9/2.15/2.16 涉及结构调整，暂不纳入）。
 
-### 改造项
+### 扫描清单
 
-#### A. `trend_threshold` — 趋势过滤阈值（阻塞扫描 2.2）
+每项独立扫描，不交叉。结果写 `./data/scan_2X.csv`（checkpoint 模式，支持断点续扫）。
 
-当前 `signal_generator.py:45` 硬编码 `ts > 0`。需改为 `ts > p["trend_threshold"]`。
+| 扫描 | 参数 | 网格 |
+|------|------|------|
+| 2.1 | `trend_window` | `[20, 40, 60, 80, 120]` |
+| 2.2 | `trend_threshold` | `[0.0, 1.0, 1.5, 2.0, 2.5, 3.0]` |
+| 2.3 | `momentum_short`, `momentum_long` | `[(20,60), (20,80), (40,120)]` |
+| 2.4 | `offense_top_k` | `[2, 3, 4, 5]` |
+| 2.6 | `target_vol_beta` | `[0.08, 0.10, 0.12]` |
+| 2.7 | `target_vol_alpha` | `[0.15, 0.20, 0.25]` |
+| 2.8 | `vol_tolerance` | `[0.01, 0.015, 0.02]` |
+| 2.10 | `drawdown_thresholds` | 3 组（见下方） |
+| 2.11 | `defense_ratio` | `[0.60, 0.70, 0.80]`（Alpha 比例 = 1 - defense_ratio） |
+| 2.12 | `corr_window` | `[40, 60, 80]` |
+| 2.13 | `corr_threshold` | `[0.0, 0.1, 0.2]` |
+| 2.14 | `ewma_lambda` | `[0.90, 0.94, 0.97]` |
 
-**修改文件**：`src/signal_generator.py`
-- `DEFAULT_PARAMS` 新增 `"trend_threshold": 0.0`（默认 0 保持向后兼容）
-- 第 45 行 `if trend_strengths[name] > 0` → `if trend_strengths[name] > p["trend_threshold"]`
+**2.10 回撤阈值三组**：
+```python
+dd_groups = {
+    "10_15_18": [(0.10, 1.0), (0.15, 0.5), (0.18, 0.0)],
+    "12_15_18": [(0.12, 1.0), (0.15, 0.5), (0.18, 0.0)],
+    "12_18_20": [(0.12, 1.0), (0.18, 0.5), (0.20, 0.0)],
+}
+```
+用 `param_grid = {"drawdown_thresholds": list(dd_groups.values())}` 扫描，结果中反查 key 标注组名。
 
-#### B. `drawdown_stop()` — 回撤止损阈值可配置（阻塞扫描 2.10）
+### 扫描脚本
 
-当前 `src/drawdown_stop.py` 硬编码三级阈值。需支持通过参数覆盖。
+在项目根目录创建 `scripts/run_phase2_scans.py`：
 
-**修改文件**：`src/drawdown_stop.py`
-- `drawdown_stop()` 新增可选参数 `thresholds: list[tuple[float, float]] | None = None`
-- 格式：`[(abs_dd_boundary, position_multiplier), ...]`，如 `[(0.08, 1.0), (0.12, 0.5), (0.18, 0.0)]`
-- 传入 `None` 时使用当前默认值，保持向后兼容
-- 值 < 第一个 boundary → multiplier=1.0；遍历 boundaries 递增
+```python
+"""阶段 2 参数扫描 — 12 项独立网格扫描，结果写入 ./data/scan_2X.csv"""
+import sys
+sys.path.insert(0, ".")
 
-**修改文件**：`src/signal_generator.py`
-- `DEFAULT_PARAMS` 新增 `"drawdown_thresholds": None`
-- `generate_signal()` 调用 `drawdown_stop(current_dd)` → `drawdown_stop(current_dd, thresholds=p.get("drawdown_thresholds"))`
+from src.data_pipeline import load_from_parquet
+from src.backtest_engine import parameter_scan
 
-#### C. `target_vol_alpha` — 进攻层波动率缩放（阻塞扫描 2.7）
+CODES = {"510300": "沪深300", "159915": "创业板", "513100": "纳指", "518880": "黄金", "511010": "国债ETF"}
 
-当前进攻层只做等权分配，未按设计文档执行目标波动率缩放。`target_vol_alpha` 在 DEFAULT_PARAMS 中声明但从未使用。
+dd_groups = {
+    "10_15_18": [(0.10, 1.0), (0.15, 0.5), (0.18, 0.0)],
+    "12_15_18": [(0.12, 1.0), (0.15, 0.5), (0.18, 0.0)],
+    "12_18_20": [(0.12, 1.0), (0.18, 0.5), (0.20, 0.0)],
+}
 
-**修改文件**：`src/signal_generator.py`
-- 进攻层计算完 `offense_weights` 后，对进攻标的计算 EWMA 协方差 → 预测波动率 → scaling_factor → 缩放进攻仓位
-- 缩放逻辑与防御层对称：`sf_alpha = scaling_factor(p["target_vol_alpha"], predicted_vol_alpha, p["vol_tolerance"])`
-- 进攻层空仓时跳过缩放
-- 缩放后的权重乘入 `offense_weights`
+SCANS = [
+    ("2.1", {"trend_window": [20, 40, 60, 80, 120]}),
+    ("2.2", {"trend_threshold": [0.0, 1.0, 1.5, 2.0, 2.5, 3.0]}),
+    ("2.3", {"momentum_short": [20, 20, 40], "momentum_long": [60, 80, 120]}),
+    ("2.4", {"offense_top_k": [2, 3, 4, 5]}),
+    ("2.6", {"target_vol_beta": [0.08, 0.10, 0.12]}),
+    ("2.7", {"target_vol_alpha": [0.15, 0.20, 0.25]}),
+    ("2.8", {"vol_tolerance": [0.01, 0.015, 0.02]}),
+    ("2.10", {"drawdown_thresholds": list(dd_groups.values())}),
+    ("2.11", {"defense_ratio": [0.60, 0.70, 0.80]}),
+    ("2.12", {"corr_window": [40, 60, 80]}),
+    ("2.13", {"corr_threshold": [0.0, 0.1, 0.2]}),
+    ("2.14", {"ewma_lambda": [0.90, 0.94, 0.97]}),
+]
 
-#### D. `defense_ratio` — 资金分配比例可配置（阻塞扫描 2.11）
+def main():
+    print("加载真实数据...")
+    prices = {}
+    for code, name in CODES.items():
+        df = load_from_parquet(f"./data/{code}.parquet")
+        prices[name] = df
+        print(f"  {name}: {len(df)} 行, {df.index[0].date()} ~ {df.index[-1].date()}")
 
-`allocate_capital()` 已接受 `defense_ratio` 参数，但 `run_backtest()` 未传递。
+    common = sorted(set.intersection(*[set(df.index) for df in prices.values()]))
+    print(f"共同交易日: {len(common)}")
 
-**修改文件**：`src/backtest_engine.py`
-- `run_backtest()` 第 62 行调用 `allocate_capital(signal, portfolio_value)` → 增加 `defense_ratio` 参数
-- 从 `params` 中读取 `defense_ratio`，默认 0.70
-- 需同时传参给 `allocate_capital()`
+    for scan_id, param_grid in SCANS:
+        path = f"./data/scan_{scan_id.replace('.', '_')}.csv"
+        print(f"\n{'='*50}")
+        print(f"扫描 {scan_id}: {list(param_grid.keys())} → {path}")
+        print(f"组合数: ", end="")
+        count = 1
+        for v in param_grid.values():
+            count *= len(v)
+        print(count)
 
-**修改文件**：`src/signal_generator.py`
-- `DEFAULT_PARAMS` 新增 `"defense_ratio": 0.70`
+        results = parameter_scan(prices, param_grid, checkpoint_path=path)
+        if results:
+            best = results[0]
+            print(f"最优: Sharpe={best.get('sharpe_ratio',0):.4f}, "
+                  f"年化={best.get('annual_return',0):.4f}, "
+                  f"最大回撤={best.get('max_drawdown',0):.4f}")
+        print(f"结果已保存: {path}")
 
-#### E. 参数扫描结果持久化
+    print("\n全部扫描完成。")
 
-当前 `parameter_scan()` 结果仅存内存，大规模扫描中途崩溃丢失全部结果。
+if __name__ == "__main__":
+    main()
+```
 
-**修改文件**：`src/backtest_engine.py`
-- `parameter_scan()` 新增可选参数 `checkpoint_path: str | None = None`
-- 传入路径时，每完成一个参数组合即追加写入 CSV（首行写表头）
-- CSV 列：参数列 + 绩效指标列（排除 `records_df` / `benchmark_nav`）
-- 已有 checkpoint 文件时跳过已完成的组合（按参数列去重），实现断点续扫
+### 扫描 2.3 参数组合说明
+
+`momentum_short` 和 `momentum_long` 需要配对扫描，当前 `parameter_scan` 做笛卡尔积。对于 2.3，需配对 `[(20,60), (20,80), (40,120)]`，不是 3×3=9 组合。
+
+处理方法：不直接用 `parameter_scan` 的网格模式，改为手动循环 3 组分别调 `run_backtest`。或在脚本中特殊处理——将 `momentum_short` 和 `momentum_long` 分别作为 list 传入但用索引配对。**推荐手写循环**，因为只有 3 组：
+
+```python
+momentum_pairs = [(20, 60), (20, 80), (40, 120)]
+# 循环 run_backtest 3 次，手动写 CSV
+```
 
 ### 约束
 
-- 只修改 `src/signal_generator.py`、`src/drawdown_stop.py`、`src/backtest_engine.py`
-- 不新增文件
-- 每个改造项向后兼容：默认参数下现有行为不变
+- 仅读取 `data/*.parquet` + 写入 `data/scan_*.csv`，不修改已有业务代码
+- 使用 checkpoint 模式，断点续扫
 - 不触碰保护区
 
 ### 验收标准
 
-- [ ] A-D 四项：`from src.signal_generator import generate_signal` 无报错
-- [ ] 默认参数下 `run_backtest(prices)` 输出与改造前一致（全量回归 69 passed）
-- [ ] `drawdown_stop(-0.10, thresholds=[(0.08, 1.0), (0.12, 0.5), (0.18, 0.0)])` 返回 `{"level": "halve", "position_multiplier": 0.5}`
-- [ ] `parameter_scan(prices, {"trend_window": [60, 80]}, checkpoint_path="./data/scan_test.csv")` 生成 CSV 文件且含 2 行数据
-- [ ] 全量测试 69+ passed（新增/修改的测试用例也绿）
-- [ ] `python -m pytest tests/ -v` — 零 failed
-
-### 运行验证命令
-
-```python
-# 1. 默认参数回归
-from src.data_pipeline import load_from_parquet
-from src.backtest_engine import run_backtest, parameter_scan
-
-codes = {"510300": "沪深300", "159915": "创业板", "513100": "纳指", "518880": "黄金", "511010": "国债ETF"}
-prices = {name: load_from_parquet(f"./data/{code}.parquet") for code, name in codes.items()}
-result = run_backtest(prices)
-print(f"总收益={result['total_return']:.4f}, Sharpe={result['sharpe_ratio']:.4f}")
-
-# 2. 改造项验证
-from src.drawdown_stop import drawdown_stop
-print(drawdown_stop(-0.10, thresholds=[(0.08, 1.0), (0.12, 0.5), (0.18, 0.0)]))
-
-# 3. checkpoint 验证
-results = parameter_scan(prices, {"trend_window": [60, 80]}, checkpoint_path="./data/scan_test.csv")
-print(f"扫描 {len(results)} 组合，CSV 已保存")
-```
+- [ ] `scripts/run_phase2_scans.py` 可运行，12 项扫描全部完成
+- [ ] `data/` 下生成 12 个 scan_*.csv 文件（每文件 ≥ 3 行数据）
+- [ ] 每个 CSV 按 Sharpe 降序排列
+- [ ] 全量测试 69 passed（回归验证）
+- [ ] 扫描结果汇总：打印每项扫描的最优参数及对应绩效
 
 ---
 
