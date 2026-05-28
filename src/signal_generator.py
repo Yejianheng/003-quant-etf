@@ -1,3 +1,4 @@
+# [2026-05-28] 修改：trend_threshold/defense_ratio 参数化、进攻层波动率缩放、drawdown_stop 自定义阈值
 # [2026-05-27] 新增：信号生成器 — Step 2-6 编排层，回测引擎与实盘执行共用入口
 
 import numpy as np
@@ -23,6 +24,9 @@ DEFAULT_PARAMS = {
     "corr_window": 60,
     "corr_sma_window": 5,
     "corr_threshold": 0.0,
+    "trend_threshold": 0.0,
+    "drawdown_thresholds": None,
+    "defense_ratio": 0.70,
 }
 
 
@@ -42,7 +46,7 @@ def generate_signal(
     for name in DEFENSE_NAMES:
         if name in close:
             trend_strengths[name] = trend_strength(close[name], window=p["trend_window"])
-    active = [name for name, ts in trend_strengths.items() if ts > 0]
+    active = [name for name, ts in trend_strengths.items() if ts > p["trend_threshold"]]
 
     # 3. 防御层目标波动率（等权参考权重）
     if active:
@@ -68,6 +72,15 @@ def generate_signal(
         rankings = []
         offense_weights = {}
 
+    # 4b. 进攻层目标波动率缩放（与防御层对称）
+    if offense_weights:
+        selected_close = pd.DataFrame({name: close[name] for name in offense_weights})
+        offense_w_array = np.array(list(offense_weights.values()))
+        offense_cov = ewma_covariance(selected_close, lambda_=p["ewma_lambda"])
+        offense_pred_vol = portfolio_volatility(offense_w_array, offense_cov)
+        sf_alpha = scaling_factor(p["target_vol_alpha"], offense_pred_vol, p["vol_tolerance"])
+        offense_weights = {name: w * sf_alpha for name, w in offense_weights.items()}
+
     # 5. 相关性熔断
     stock_basket = {name: close[name] for name in ["沪深300", "创业板", "纳指"] if name in close}
     bond_close = close.get("国债ETF")
@@ -85,7 +98,7 @@ def generate_signal(
     # 6. 回撤硬止损
     dd_series = compute_drawdown(portfolio_value)
     current_dd = float(dd_series.iloc[-1])
-    ds = drawdown_stop(current_dd)
+    ds = drawdown_stop(current_dd, thresholds=p.get("drawdown_thresholds"))
 
     # 7. execution 汇总
     if cb["triggered"]:

@@ -1,6 +1,9 @@
+# [2026-05-28] 修改：run_backtest 传递 defense_ratio；parameter_scan 支持 checkpoint 持久化
 # [2026-05-27] 新增：回测引擎 — 日循环驱动 + 参数扫描入口
 
+import csv
 import itertools
+import os
 import numpy as np
 import pandas as pd
 
@@ -62,7 +65,8 @@ def run_backtest(
         # 可见数据 + 信号 + 分配
         visible_prices = {name: df.loc[:today] for name, df in prices.items()}
         signal = generate_signal(visible_prices, nav_series.iloc[: t + 1], params)
-        alloc = allocate_capital(signal, nav)
+        defense_ratio = (params or {}).get("defense_ratio", 0.70)
+        alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
 
         # 调仓：目标金额 → 股数（今日收盘价成交）
         positions = {}
@@ -128,10 +132,12 @@ def parameter_scan(
     param_grid: dict[str, list],
     initial_capital: float = 1_000_000,
     min_days: int = 120,
+    checkpoint_path: str | None = None,
 ) -> list[dict]:
     """参数扫描入口。
 
     param_grid: {"trend_window": [40, 60, 80], "target_vol_beta": [0.08, 0.10, 0.12], ...}
+    checkpoint_path: 可选 CSV 路径，每完成一个组合追加写入，支持断点续扫。
 
     对每个参数组合调用 run_backtest，返回按 Sharpe 降序排列的结果列表。
     每个元素 = {**params_combo, **绩效指标}（不含 records_df / benchmark_nav）。
@@ -140,22 +146,64 @@ def parameter_scan(
     value_lists = list(param_grid.values())
     combinations = list(itertools.product(*value_lists))
 
+    # 断点续扫：读取已完成组合
+    completed: set[tuple] = set()
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        with open(checkpoint_path, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                completed.add(tuple(row[k] for k in keys))
+
     results: list[dict] = []
+    header_written = bool(completed)  # 已有文件 → 表头已存在
     for combo in combinations:
         params = dict(zip(keys, combo))
+        # 跳过已完成组合
+        if checkpoint_path:
+            param_tuple = tuple(str(params[k]) for k in keys)
+            if param_tuple in completed:
+                continue
+
         bt = run_backtest(
             prices,
             initial_capital=initial_capital,
             params=params,
             min_days=min_days,
         )
-        # 提取标量指标，排除 DataFrame/Series
         scalar_metrics = {
             k: v
             for k, v in bt.items()
             if k not in ("records_df", "benchmark_nav")
         }
         results.append({**params, **scalar_metrics})
+
+        # checkpoint 写入
+        if checkpoint_path:
+            row = {**{k: str(v) for k, v in params.items()}, **scalar_metrics}
+            os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
+            mode = "a" if header_written else "w"
+            with open(checkpoint_path, mode, newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+                if not header_written:
+                    writer.writeheader()
+                    header_written = True
+                writer.writerow(row)
+
+    # 合并内存结果与 checkpoint 已有数据用于排序
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        with open(checkpoint_path, "r", newline="") as f:
+            all_rows = list(csv.DictReader(f))
+        all_results = []
+        for row in all_rows:
+            entry = {}
+            for k, v in row.items():
+                try:
+                    entry[k] = float(v)
+                except (ValueError, TypeError):
+                    entry[k] = v
+            all_results.append(entry)
+        all_results.sort(key=lambda r: float(r.get("sharpe_ratio", 0)), reverse=True)
+        return all_results
 
     results.sort(key=lambda r: r["sharpe_ratio"], reverse=True)
     return results
