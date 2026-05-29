@@ -13,8 +13,9 @@ from src.drawdown_stop import compute_drawdown, drawdown_stop
 
 DEFENSE_NAMES = ["沪深300", "创业板", "纳指", "黄金", "国债ETF"]
 
+# [2026-05-29] 修改：trend_window 60→40（阶段2跨12年扫描最优）、defense_ratio 0.70→1.00（纯防御最优）
 DEFAULT_PARAMS = {
-    "trend_window": 60,
+    "trend_window": 40,
     "momentum_short": 20,
     "momentum_long": 60,
     "offense_top_k": 3,
@@ -27,7 +28,7 @@ DEFAULT_PARAMS = {
     "corr_threshold": 0.0,
     "trend_threshold": 0.0,
     "drawdown_thresholds": None,
-    "defense_ratio": 0.70,
+    "defense_ratio": 1.00,
 }
 
 
