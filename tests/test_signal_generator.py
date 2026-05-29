@@ -1,3 +1,4 @@
+# [2026-05-29] 新增：进攻层趋势过滤测试 — TestOffenseTrendFilter
 # [2026-05-27] 新增：信号生成器测试 — 4 场景
 
 import numpy as np
@@ -170,4 +171,68 @@ class TestDrawdownStopCovers:
         )
         assert signal["execution"]["final_multiplier"] == 0.0, (
             f"liquidate 时 final_multiplier 应为 0，实际 {signal['execution']['final_multiplier']}"
+        )
+
+
+class TestOffenseTrendFilter:
+    """进攻层趋势过滤 — price > MA(trend_window) 才进入截面排名"""
+
+    def test_filters_out_below_ma_offense_etf(self):
+        """消费ETF在MA上方、科技ETF在MA下方 → 仅消费ETF进入排名"""
+        rng = np.random.RandomState(42)
+        n = 120
+        # 防御层全部上涨
+        stock_noise = rng.normal(0, 0.001, n)
+        stock_r = np.full(n, 0.001) + stock_noise
+        bond_r = np.full(n, 0.0005) - stock_noise
+
+        prices = {
+            "沪深300": _make_ohlcv(_price_series(stock_r)),
+            "创业板": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "纳指": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "黄金": _make_ohlcv(_price_series(rng.normal(0.0005, 0.001, n))),
+            "国债ETF": _make_ohlcv(_price_series(bond_r)),
+            # 进攻层：消费ETF上涨（价在MA上方），科技ETF下跌（价在MA下方）
+            "消费ETF": _make_ohlcv(_price_series(np.full(n, 0.001) + rng.normal(0, 0.0005, n))),
+            "科技ETF": _make_ohlcv(_price_series(np.full(n, -0.002) + rng.normal(0, 0.0005, n))),
+        }
+        pv = _make_rising_portfolio(n)
+        params = {"trend_window": 40, "offense_top_k": 2}
+        signal = generate_signal(prices, pv, params)
+
+        rankings = signal["offense"]["rankings"]
+        ranked_names = [r["name"] for r in rankings]
+        assert "消费ETF" in ranked_names, (
+            f"消费ETF在MA上方应进入排名，实际 rankings={ranked_names}"
+        )
+        assert "科技ETF" not in ranked_names, (
+            f"科技ETF在MA下方应被排除，实际 rankings={ranked_names}"
+        )
+
+    def test_all_offense_below_ma_empty_rankings(self):
+        """全部进攻ETF在MA下方 → rankings为空，资金进repo"""
+        rng = np.random.RandomState(99)
+        n = 120
+        stock_noise = rng.normal(0, 0.001, n)
+        stock_r = np.full(n, 0.001) + stock_noise
+
+        prices = {
+            "沪深300": _make_ohlcv(_price_series(stock_r)),
+            "创业板": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "纳指": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "黄金": _make_ohlcv(_price_series(rng.normal(0.0005, 0.001, n))),
+            "国债ETF": _make_ohlcv(_price_series(np.full(n, 0.0005) - stock_noise)),
+            # 两只进攻ETF均下跌
+            "消费ETF": _make_ohlcv(_price_series(np.full(n, -0.002) + rng.normal(0, 0.0005, n))),
+            "科技ETF": _make_ohlcv(_price_series(np.full(n, -0.003) + rng.normal(0, 0.0005, n))),
+        }
+        pv = _make_rising_portfolio(n)
+        params = {"trend_window": 40, "offense_top_k": 2}
+        signal = generate_signal(prices, pv, params)
+
+        assert signal["offense"]["rankings"] == [], (
+            f"全部进攻ETF在MA下方时 rankings 应为空，实际 {signal['offense']['rankings']}"
+        )
+        assert signal["offense"]["target_weights"] == {}, (
+            f"全部进攻ETF在MA下方时 target_weights 应为空，实际 {signal['offense']['target_weights']}"
         )
