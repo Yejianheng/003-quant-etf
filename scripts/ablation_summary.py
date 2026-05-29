@@ -1,3 +1,4 @@
+# [2026-05-30] 修改：extract_mixed_row → extract_defense_row，切换为纯防御配置
 # [2026-05-30] 新增：Ablation 汇总 — 四个模块独立贡献对比
 
 import os
@@ -10,12 +11,12 @@ BASE = os.path.join(os.path.dirname(__file__), "..")
 OUTPUT_DIR = os.path.join(BASE, "output")
 
 
-def extract_mixed_row(csv_path: str) -> tuple:
-    """从 ablation CSV 提取混合配置的(有模块行, 无模块行)。"""
+def extract_defense_row(csv_path: str) -> tuple:
+    """从 ablation CSV 提取纯防御配置的(有模块行, 无模块行)。"""
     df = pd.read_csv(os.path.join(OUTPUT_DIR, csv_path))
-    mixed = df[df["配置"] == "混合"]
-    row_on = mixed[mixed["状态"].isin(["有趋势过滤", "有vol target", "EWMA λ=0.94", "有熔断"])]
-    row_off = mixed[mixed["状态"].isin(["无趋势过滤", "固定等权", "历史协方差", "无熔断"])]
+    defense = df[df["配置"] == "纯防御"]
+    row_on = defense[defense["状态"].isin(["有趋势过滤", "有vol target", "EWMA λ=0.94", "有熔断"])]
+    row_off = defense[defense["状态"].isin(["无趋势过滤", "固定等权", "历史协方差", "无熔断"])]
     return (
         row_on.iloc[0].to_dict() if len(row_on) > 0 else {},
         row_off.iloc[0].to_dict() if len(row_off) > 0 else {},
@@ -36,7 +37,7 @@ def main():
 
     summary_rows = []
     for name, fpath in ablations:
-        row_on, row_off = extract_mixed_row(fpath)
+        row_on, row_off = extract_defense_row(fpath)
         if not row_on or not row_off:
             print("  {0}: 数据缺失，跳过".format(name))
             continue
