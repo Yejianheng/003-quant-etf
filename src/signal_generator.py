@@ -1,3 +1,4 @@
+# [2026-05-29] 新增：vol_scaling_enabled 参数 — ablation 开关，关闭后固定等权不缩放
 # [2026-05-29] 新增：trend_filter_enabled 参数 — ablation 开关，关闭后防御/进攻全仓等权
 # [2026-05-29] 修改：进攻层切换为时间序列动量 — 取消截面排名，price>MA 即通过等权
 # [2026-05-29] 新增：进攻层绝对趋势过滤 — price > MA(trend_window) 才进入截面排名
@@ -29,6 +30,7 @@ DEFAULT_PARAMS = {
     "corr_threshold": 0.0,
     "trend_threshold": 0.0,
     "trend_filter_enabled": True,
+    "vol_scaling_enabled": True,
     "drawdown_thresholds": None,
     "defense_ratio": 1.00,
 }
@@ -59,9 +61,12 @@ def generate_signal(
     if active:
         active_close = pd.DataFrame({name: close[name] for name in active})
         raw_weights = np.ones(len(active)) / len(active)
-        cov = ewma_covariance(active_close, lambda_=p["ewma_lambda"])
-        predicted_vol = portfolio_volatility(raw_weights, cov)
-        sf = scaling_factor(p["target_vol_beta"], predicted_vol, p["vol_tolerance"])
+        if p.get("vol_scaling_enabled", True):
+            cov = ewma_covariance(active_close, lambda_=p["ewma_lambda"])
+            predicted_vol = portfolio_volatility(raw_weights, cov)
+            sf = scaling_factor(p["target_vol_beta"], predicted_vol, p["vol_tolerance"])
+        else:
+            sf = 1.0
         defense_target_weights = dict(zip(active, raw_weights))
     else:
         sf = 1.0
@@ -90,12 +95,13 @@ def generate_signal(
 
     # 4b. 进攻层目标波动率缩放（与防御层对称）
     if offense_weights:
-        selected_close = pd.DataFrame({name: close[name] for name in offense_weights})
-        offense_w_array = np.array(list(offense_weights.values()))
-        offense_cov = ewma_covariance(selected_close, lambda_=p["ewma_lambda"])
-        offense_pred_vol = portfolio_volatility(offense_w_array, offense_cov)
-        sf_alpha = scaling_factor(p["target_vol_alpha"], offense_pred_vol, p["vol_tolerance"])
-        offense_weights = {name: w * sf_alpha for name, w in offense_weights.items()}
+        if p.get("vol_scaling_enabled", True):
+            selected_close = pd.DataFrame({name: close[name] for name in offense_weights})
+            offense_w_array = np.array(list(offense_weights.values()))
+            offense_cov = ewma_covariance(selected_close, lambda_=p["ewma_lambda"])
+            offense_pred_vol = portfolio_volatility(offense_w_array, offense_cov)
+            sf_alpha = scaling_factor(p["target_vol_alpha"], offense_pred_vol, p["vol_tolerance"])
+            offense_weights = {name: w * sf_alpha for name, w in offense_weights.items()}
 
     # 5. 相关性熔断
     stock_basket = {name: close[name] for name in ["沪深300", "创业板", "纳指"] if name in close}
