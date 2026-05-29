@@ -31,6 +31,7 @@ DEFAULT_PARAMS = {
     "trend_threshold": 0.0,
     "trend_filter_enabled": True,
     "vol_scaling_enabled": True,
+    "covariance_method": "ewma",
     "drawdown_thresholds": None,
     "defense_ratio": 1.00,
 }
@@ -62,7 +63,8 @@ def generate_signal(
         active_close = pd.DataFrame({name: close[name] for name in active})
         raw_weights = np.ones(len(active)) / len(active)
         if p.get("vol_scaling_enabled", True):
-            cov = ewma_covariance(active_close, lambda_=p["ewma_lambda"])
+            cov = ewma_covariance(active_close, lambda_=p["ewma_lambda"],
+                                   method=p.get("covariance_method", "ewma"))
             predicted_vol = portfolio_volatility(raw_weights, cov)
             sf = scaling_factor(p["target_vol_beta"], predicted_vol, p["vol_tolerance"])
         else:
@@ -98,7 +100,8 @@ def generate_signal(
         if p.get("vol_scaling_enabled", True):
             selected_close = pd.DataFrame({name: close[name] for name in offense_weights})
             offense_w_array = np.array(list(offense_weights.values()))
-            offense_cov = ewma_covariance(selected_close, lambda_=p["ewma_lambda"])
+            offense_cov = ewma_covariance(selected_close, lambda_=p["ewma_lambda"],
+                                           method=p.get("covariance_method", "ewma"))
             offense_pred_vol = portfolio_volatility(offense_w_array, offense_cov)
             sf_alpha = scaling_factor(p["target_vol_alpha"], offense_pred_vol, p["vol_tolerance"])
             offense_weights = {name: w * sf_alpha for name, w in offense_weights.items()}
