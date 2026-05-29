@@ -1,3 +1,4 @@
+# [2026-05-30] 新增：execution_lag 参数（0=当日成交，1=T+1成交）— Look-Ahead Bias 验证
 # [2026-05-29] 修改：修正回测起始日（≥防御全部就位）+ 清盘恢复机制（repo 利息 + 状态追踪）
 # [2026-05-29] 修改：run_backtest 日期从交集改为并集 + 动态 ETF 接入 + union_dates/get_available_etfs
 # [2026-05-28] 修改：run_backtest 传递 defense_ratio；parameter_scan 支持 checkpoint 持久化
@@ -50,6 +51,7 @@ def run_backtest(
     initial_capital: float = 1_000_000,
     params: dict | None = None,
     min_days: int = 120,
+    execution_lag: int = 0,
 ) -> dict:
     """运行完整回测。
 
@@ -57,6 +59,7 @@ def run_backtest(
     initial_capital: 初始资金。
     params: 传给 generate_signal 的参数。
     min_days: 最少需要的数据天数（trend_window + corr_window + sma_window 缓冲）。
+    execution_lag: 0=信号当日成交（当前），1=T+1成交（修正 Look-Ahead Bias）。
 
     返回绩效指标 dict，含 records_df 和 benchmark_nav。
     """
@@ -85,6 +88,8 @@ def run_backtest(
     # 清盘恢复状态追踪
     prev_drawdown_level = "normal"
     liquidation_nav: float | None = None
+    # T+1 执行：存储上一日的 alloc，当日执行
+    pending_alloc: dict | None = None
 
     nav_values = np.full(len(dates), float(initial_capital))
     nav_series = pd.Series(nav_values, index=dates, dtype=float)
@@ -135,15 +140,26 @@ def run_backtest(
 
         alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
 
-        # 调仓：目标金额 → 股数（今日收盘价成交）
+        # 调仓：目标金额 → 股数
+        if execution_lag == 0:
+            # 信号当日成交：T 日信号 → T 日收盘价成交
+            exec_day = today
+            exec_alloc = alloc
+        else:
+            # T+1 成交：T-1 日信号 → T 日收盘价成交
+            exec_alloc = pending_alloc  # 昨日信号（首日为 None）
+            pending_alloc = alloc  # 今日信号留给明日
+            exec_day = today
+
         positions = {}
-        for name, target_dollar in alloc["positions"].items():
-            if name not in prices or today not in prices[name].index:
-                continue
-            price = prices[name].loc[today, "close"]
-            if price > 0:
-                positions[name] = target_dollar / price
-        repo_cash = alloc["repo_amount"]
+        if exec_alloc is not None:
+            for name, target_dollar in exec_alloc["positions"].items():
+                if name not in prices or exec_day not in prices[name].index:
+                    continue
+                price = prices[name].loc[exec_day, "close"]
+                if price > 0:
+                    positions[name] = target_dollar / price
+            repo_cash = exec_alloc["repo_amount"]
 
         # 日记录
         record_daily(
