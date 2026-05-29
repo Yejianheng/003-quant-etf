@@ -1,0 +1,7 @@
+{
+  "offense_count_threshold": 2,
+  "trend_threshold": -0.0153,
+  "offense_allocation": 0.3,
+  "rule": "offense_count <= 2 AND trend > 0 -> 30% offense",
+  "accuracy_on_regimes": 0.8
+}
