@@ -1,62 +1,88 @@
-# 执行结果 — 引擎关键参数进入 protected-contracts.json Hook 保护
+# 执行结果 — 市场状态压力测试：四个 regime 独立分析
 
 > 执行时间: 2026-05-29 | 状态: 全部完成 | 验收: PASS
 
 ---
 
-## 步骤 1：更新 protected-contracts.json
+## 最终报告
 
-**Commit**: `v1-20260529-99` | audit: Qwen3-Max 盲审通过
+| Regime | 纯防御收益 | 纯防御Sharpe | 最大回撤 | 空仓率 | Whipsaw | 是否存活 |
+|--------|-----------|-------------|---------|--------|---------|---------|
+| 单边牛市 | 121.9% | 2.19 | -10.6% | 15.5% | 0 | 存活 |
+| 长期熊市 | 41.5% | 0.50 | -9.1% | 34.2% | 0 | 存活 |
+| 高频震荡市 | 49.6% | 0.71 | -7.6% | 18.3% | 53 | 存活 |
+| 利率regime_shift | 0.9% | -0.11 | -6.1% | 31.8% | 0 | 存活 |
 
-`values` 数组从模板占位替换为 8 条实际记录：
-
-| 参数 | 值 | 文件 | 验证 |
-|------|:--:|------|------|
-| trend_window | 40 | signal_generator.py | 阶段2跨12年扫描最优 |
-| ewma_lambda | 0.94 | signal_generator.py | RiskMetrics标准 |
-| target_vol_beta | 0.10 | signal_generator.py | 防御层10%目标波动 |
-| target_vol_alpha | 0.20 | signal_generator.py | 进攻层20%目标波动 |
-| defense_ratio | 1.00 | signal_generator.py | 纯防御最优 |
-| dd_threshold_halve | 0.08 | drawdown_stop.py | 三级阈值第一级 |
-| dd_threshold_warning | 0.12 | drawdown_stop.py | 三级阈值第二级 |
-| dd_threshold_liquidate | 0.18 | drawdown_stop.py | 三级阈值第三级 |
-
-`patterns` 数组新增 5 条正则禁止模式，防止阈值偏离验证值。
+**全部四个 regime 回撤 ≤ 10.6%，未触发 20% 硬约束。**
 
 ---
 
-## 步骤 2：验证 Hook 生效
+## 步骤详情
 
-- `trend_window=60`（偏离验证值40）→ check_values 报 `[常量篡改]` ✓
-- 修正为 40 后 → 零违规 ✓
-- `defense_ratio=0.70` → 报 `[常量篡改]` ✓
-- 修正为 1.00 后 → 零违规 ✓
+### 步骤 1：四个 regime 独立绩效提取 (`v1-20260529-100`)
 
-同步修正 `src/signal_generator.py` 中 `DEFAULT_PARAMS` 两个值以对齐验证值。
+写入 `scripts/analyze_regime_stress.py`，按日期区间切片计算指标并对比三大基准。
+
+- **单边牛市** (2014-2015 + 2019-2020): 纯防御 121.9%, Sharpe 2.19 vs 沪深300 142.5%, 创业板 107.5%。趋势跟踪跑输绝对收益但 Sharpe 是沪深300 的 2.2 倍。
+- **长期熊市** (2018 + 2022 Jan-Oct): 纯防御 41.5% vs 沪深300 -13.8%。熊市防御有效。
+- **高频震荡市** (2016 + 2021H2): 纯防御 49.6% vs 沪深300 72.8%。震荡市是趋势策略最弱环境。
+- **利率 regime shift** (2022): 纯防御 0.9%, Sharpe -0.11 vs 沪深300 -21.1%。保本但勉强。
+
+### 步骤 2：震荡市 Whipsaw 分析 (`v1-20260529-101`)
+
+写入 `scripts/analyze_whipsaw.py`，检测 defense_active 中 ETF 级进出信号。
+
+- 2016 震荡：27 次 whipsaw，14 次亏损，累计磨损 -11.64%
+- 2021H2 震荡：26 次 whipsaw，16 次亏损，累计磨损 -9.31%
+- 纳指是最易 whipsaw 的 ETF（2016 年 6 次，2021H2 年 2 次）
+- 创业板在 2016 年 10 次 whipsaw 是最高单标的
+
+### 步骤 3：2022 股债双杀专项 (`v1-20260529-102`)
+
+写入 `scripts/analyze_2022_bear.py`，追踪五只 ETF 状态 + 资金迁移 + 对比 60/40。
+
+- **资金逐级撤退**：1月6日权益清仓 → 纯债 → 4月22日进入 repo（持续 80 天）
+- **两次熔断**：4/22→7/11 (80天) + 9/23→11/4 (42天)，合计 122 交易日在 repo
+- **vs 60/40**：纯防御 +0.9% vs 60/40 -12.0%，回撤 -6.1% vs -17.0%
+- **阶段分布**：避险资产 41.3%（+3.71%）、股债混合 29.8%（+1.85%）、权益+黄金 16.1%（-2.77%）
+
+### 步骤 4：汇总报告 (`v1-20260529-103`)
+
+合并前三步数据输出 `output/regime_stress_report.csv`。
 
 ---
 
-## 步骤 3：补齐 drawdown_stop.py 参数保护
+## 关键发现
 
-- 原方案用单条 list 值 `[0.08, 0.12, 0.18]` → 文本搜索无法匹配（文件中无此字面字符串）
-- 改为 3 条独立 values 记录 → check_values 文本搜索通过 ✓
-- patterns 正则禁止模式验证：改 `0.08→0.07` → 报 `[禁止模式]` ✓
-
----
-
-## 全量回归
-
-**149 passed, 3 skipped, 1 failed**
-
-唯一 failure (`test_loads_summary`: `len(df) >= 6`，实际 3 行) 为预存问题，与本次修改无关。信号生成器 7 个测试全部通过。
+1. **系统最强**：单边牛市 (Sharpe 2.19)，趋势跟踪跟得上
+2. **系统最弱**：利率 shift (Sharpe -0.11)，但依然保本
+3. **震荡市 whipsaw 是主要磨损源**：累计磨损 ~10-12%，但未危及生存
+4. **熔断机制在 2022 年发挥了关键保护作用**：122 天 repo + 避险资产占 41%，系统识别到危险后立即撤退
+5. **黄金在 2022 年替代债券成为核心对冲**：黄金 active 66%、国债ETF 70%
 
 ---
 
-## 发现的问题
+## 测试结果
 
-1. **check_values.py 仅支持文本搜索**：`check_values()` 用子串匹配，`check_ast_constants()` 仅处理顶层赋值。DEFAULT_PARAMS 内嵌套值无法进行 AST 级校验。当前靠文本搜索兜底，可能被同值字符串（如注释中的 `0.08`）绕过。建议后续增强 `check_ast_constants()` 支持 dict 递归提取。
+- 全量：182 passed, 1 failed (预存 `test_loads_summary`，与本次无关), 3 skipped
+- 新增 33 个测试全部通过，零回归
 
-2. **trend_window 代码与验证值不一致**：方向写入验证值为 40，但代码默认为 60。已在本任务中修正。类似不一致可能存在于其他参数。
+---
+
+## 产出清单
+
+| 类型 | 文件 | 行数 |
+|------|------|------|
+| 脚本 | `scripts/analyze_regime_stress.py` | ~270 |
+| 脚本 | `scripts/analyze_whipsaw.py` | ~210 |
+| 脚本 | `scripts/analyze_2022_bear.py` | ~220 |
+| 脚本 | `scripts/regime_report.py` | ~140 |
+| 测试 | `tests/test_analyze_regime_stress.py` | 11 tests |
+| 测试 | `tests/test_analyze_whipsaw.py` | 9 tests |
+| 测试 | `tests/test_analyze_2022_bear.py` | 10 tests |
+| 测试 | `tests/test_regime_report.py` | 3 tests |
+| 数据 | `output/regime_*.csv` | 8 files |
+| 数据 | `output/regime_stress_report.csv` | 最终报告 |
 
 ---
 
