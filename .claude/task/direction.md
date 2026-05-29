@@ -6,6 +6,69 @@
 
 **每步完成 → 验证通过 → 提交 → 再进行下一步。** 禁止批量执行后统一提交。
 
+---
+
+## 当前任务：Look-Ahead Bias 验证 + 修复（最高优先级）
+
+### 背景
+
+回测引擎 `src/backtest_engine.py` 的日循环中：
+
+```python
+# line 113: 信号用 today 收盘价
+visible_prices = {name: prices[name].loc[:today] for name in available_names}
+signal = generate_signal(visible_prices, nav_series.iloc[: t + 1], params)
+
+# line 143: 成交也用 today 收盘价
+price = prices[name].loc[today, "close"]
+positions[name] = target_dollar / price
+```
+
+信号生成和成交用了同一个 `today` 收盘价。实盘中不可能：你收盘后才能看到收盘价，不可能同时用它做交易决策和成交价。这是 1 日 look-ahead。
+
+### 步骤 1：量化当前偏差
+
+写 `scripts/check_lookahead_bias.py`：
+
+1. **原引擎（当前）**：信号 T 日收盘 → 成交 T 日收盘
+2. **修正版**：信号 T 日收盘 → 成交 T+1 日收盘（延迟一日执行）
+
+对比两版全量 2014-2026 回测：
+
+| 指标 | 原版（T日成交） | 修正版（T+1日成交） | 差异 |
+|------|---------------|-------------------|------|
+| 总收益 | | | |
+| 年化 | | | |
+| Sharpe | | | |
+| 最大回撤 | | | |
+| 日收益相关性 | | | |
+
+**关键判断**：差异是否在噪声范围内（Sharpe 差 < 0.05）？还是需要修复引擎？
+
+### 步骤 2：根据结果决策
+
+- **差异 < 噪声**（Sharpe 差 < 0.05）→ 记录结论，不改引擎，继续 ablation
+- **差异 ≥ 噪声** → 修复 `backtest_engine.py`，改为 T+1 执行，全量测试零回归后提交
+
+### 步骤 3（如需要修复）：信号对齐验证
+
+修复后验证以下场景不存在 look-ahead：
+
+| 检查点 | 验证方式 |
+|--------|---------|
+| 信号不依赖 T 日之后的数据 | `generate_signal` 接收的 prices 全部 `.loc[:today]` |
+| 成交价不早于信号日 | 成交用 `dates[t+1]` 而非 `dates[t]` |
+| NAV 估值时间线正确 | 先估值 → 再生成信号 → 次日成交 |
+| 熔断/vol target 不偷跑 | corr/vol 计算窗口不包含执行日 |
+
+### 验收标准
+
+- 量化了 T 日 vs T+1 日执行的差异
+- 若需修复：全量测试零回归，三基准对比表更新
+- 结论写入 output（无论修复与否）
+
+---
+
 ## 当前任务：子模块 ablation — 确认每个组件独立贡献
 
 ### 背景
