@@ -100,14 +100,15 @@ process.stdin.on("end", () => {
   // ── 角色门禁：顾问角色禁止 Bash 操作 ── @claude-override-approved
   // [2026-05-29] 修改：豁免 .claude/task/ 目录，advisor 可操作协议文件 @claude-override-approved
   // @claude-override-approved
-  const ROLE_FILE = path.join(__dirname, "..", "role.json");
+  const ROLE_FILE = path.join(__dirname, "..", ".gate", "role.json"); // @claude-override-approved — Hook 读取 .gate/ 下人手管理的角色文件，终端始终 executor
   try {
     if (fs.existsSync(ROLE_FILE)) {
       const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
       if (roleData.role === "advisor" || roleData.role === "consultant") {
         // @claude-override-approved — 豁免 .claude/task/ 目录（协议文件：direction/outcome/recommendation）
         const taskPaths = extractPaths(command);
-        const allTaskFiles = taskPaths.length > 0 && taskPaths.every(function(p) { return p.includes(".claude/task/"); });
+        // @claude-override-approved — 修复：空路径=纯读命令，放行
+        const allTaskFiles = taskPaths.length === 0 || taskPaths.every(function(p) { return p.includes(".claude/task/"); });
         if (!allTaskFiles) {
           console.error(
             "\n============================================" +
