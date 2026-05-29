@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：修正回测起始日（≥防御全部就位）+ 清盘恢复机制（repo 利息 + 状态追踪）
 # [2026-05-29] 修改：run_backtest 日期从交集改为并集 + 动态 ETF 接入 + union_dates/get_available_etfs
 # [2026-05-28] 修改：run_backtest 传递 defense_ratio；parameter_scan 支持 checkpoint 持久化
 # [2026-05-27] 新增：回测引擎 — 日循环驱动 + 参数扫描入口
@@ -8,10 +9,12 @@ import os
 import numpy as np
 import pandas as pd
 
-from src.signal_generator import generate_signal
+from src.signal_generator import DEFENSE_NAMES, generate_signal
 from src.portfolio_manager import allocate_capital
 from src.recorder import init_recorder, record_daily, get_records_df
 from src.benchmark import compute_benchmark, compute_single_benchmark
+
+REPO_ANNUAL_RATE = 0.02
 
 
 def union_dates(prices: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
@@ -60,9 +63,18 @@ def run_backtest(
     # 1. 日期范围：所有标的 index 的并集（动态 ETF 接入）
     dates = union_dates(prices)
 
+    # 1b. 截断到防御 ETF 全部就位之后
+    defense_starts = []
+    for name in DEFENSE_NAMES:
+        if name in prices and len(prices[name]) > 0:
+            defense_starts.append(prices[name].index.min())
+    if defense_starts:
+        defense_start = max(defense_starts)
+        dates = dates[dates >= defense_start]
+
     if len(dates) <= min_days:
         raise ValueError(
-            f"共同交易日不足：需要 > {min_days} 天，实际 {len(dates)} 天"
+            f"防御全就位后交易日不足：需要 > {min_days} 天，实际 {len(dates)} 天"
         )
 
     # 2. 初始状态
@@ -70,6 +82,9 @@ def run_backtest(
     positions: dict[str, float] = {}
     repo_cash = float(initial_capital)
     recorder = init_recorder()
+    # 清盘恢复状态追踪
+    prev_drawdown_level = "normal"
+    liquidation_nav: float | None = None
 
     nav_values = np.full(len(dates), float(initial_capital))
     nav_series = pd.Series(nav_values, index=dates, dtype=float)
@@ -77,6 +92,9 @@ def run_backtest(
     # 3. 日循环
     for t in range(min_days, len(dates)):
         today = dates[t]
+
+        # repo 现金日利息（年化 2% / 252）
+        repo_cash *= (1.0 + REPO_ANNUAL_RATE / 252.0)
 
         # 估值：昨日持仓按今日收盘价重估
         if positions:
@@ -95,6 +113,26 @@ def run_backtest(
         visible_prices = {name: prices[name].loc[:today] for name in available_names}
         signal = generate_signal(visible_prices, nav_series.iloc[: t + 1], params)
         defense_ratio = (params or {}).get("defense_ratio", 0.70)
+
+        # 清盘恢复机制：持续监控 drawdown，回到 halve 阈值以下则恢复
+        current_level = signal["drawdown_stop"]["level"]
+        current_dd = signal["drawdown_stop"]["drawdown"]
+        if prev_drawdown_level == "liquidate":
+            if current_level != "liquidate":
+                # drawdown 已自然回落到 halve/warning/normal → 恢复
+                pass  # signal 已包含正确的 level/multiplier
+            elif liquidation_nav is not None and current_dd > -0.12:
+                # repo 利息让 nav 回升，drawdown 已 < 12% → 强制恢复 halve
+                signal["drawdown_stop"]["level"] = "halve"
+                signal["drawdown_stop"]["position_multiplier"] = 0.5
+                signal["execution"]["final_multiplier"] = min(
+                    signal["defense"]["scaling_factor"], 0.5
+                )
+                signal["execution"]["funds_to_repo"] = False
+        if current_level == "liquidate" and prev_drawdown_level != "liquidate":
+            liquidation_nav = nav
+        prev_drawdown_level = current_level
+
         alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
 
         # 调仓：目标金额 → 股数（今日收盘价成交）
