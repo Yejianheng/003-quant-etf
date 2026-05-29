@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：rankings 格式适配时间序列动量 — 取消 score 字段
 # [2026-05-27] 新增：Recorder 测试 — 3 场景
 
 import pandas as pd
@@ -13,7 +14,7 @@ def _make_signal(defense_active=None, offense_top=None, cb_triggered=False,
             "active": defense_active or ["沪深300", "创业板", "纳指", "黄金", "国债ETF"],
         },
         "offense": {
-            "rankings": [{"name": n, "score": s} for n, s in (offense_top or [])],
+            "rankings": [{"name": n} for n in (offense_top or [])],
         },
         "circuit_breaker": {"triggered": cb_triggered},
         "drawdown_stop": {"level": dd_level, "drawdown": dd},
@@ -51,7 +52,7 @@ class TestFieldCorrectness:
         rec = init_recorder()
         signal = _make_signal(
             defense_active=["沪深300", "国债ETF"],
-            offense_top=[("半导体", 2.5)],
+            offense_top=["半导体"],
         )
         positions = {"沪深300": 600_000, "国债ETF": 300_000, "半导体": 100_000}
 

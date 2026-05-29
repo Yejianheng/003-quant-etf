@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：rankings 格式适配时间序列动量 — 取消 score 字段
 # [2026-05-27] 新增：组合管理器测试 — 5 场景
 
 import pytest
@@ -51,9 +52,9 @@ def _make_offense_signal():
     signal = _make_all_green_signal()
     signal["offense"] = {
         "rankings": [
-            {"name": "半导体", "score": 2.5},
-            {"name": "新能源", "score": 2.1},
-            {"name": "医药", "score": 1.8},
+            {"name": "半导体"},
+            {"name": "新能源"},
+            {"name": "医药"},
         ],
         "target_weights": {
             "半导体": 1 / 3,

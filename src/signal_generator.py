@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：进攻层切换为时间序列动量 — 取消截面排名，price>MA 即通过等权
 # [2026-05-29] 新增：进攻层绝对趋势过滤 — price > MA(trend_window) 才进入截面排名
 # [2026-05-28] 修改：trend_threshold/defense_ratio 参数化、进攻层波动率缩放、drawdown_stop 自定义阈值
 # [2026-05-27] 新增：信号生成器 — Step 2-6 编排层，回测引擎与实盘执行共用入口
@@ -6,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 from src.trend_strength import trend_strength
-from src.cross_sectional_momentum import composite_momentum
 from src.target_volatility import ewma_covariance, portfolio_volatility, scaling_factor
 from src.correlation_circuit_breaker import correlation_circuit_breaker
 from src.drawdown_stop import compute_drawdown, drawdown_stop
@@ -61,10 +61,11 @@ def generate_signal(
         sf = 1.0
         defense_target_weights = {}
 
-    # 4. 进攻层截面动量（仅非防御标的参与）
+    # 4. 进攻层时间序列动量（price > MA → 通过，等权分配）
     offense_names = [name for name in close if name not in DEFENSE_NAMES]
+    offense_weights = {}
+    rankings = []
     if offense_names:
-        # 绝对趋势过滤：price > MA(trend_window) 才进入截面排名（与防御层统一逻辑）
         trend_filtered = []
         for name in offense_names:
             series = close[name]
@@ -73,17 +74,8 @@ def generate_signal(
                 if series.iloc[-1] > ma.iloc[-1]:
                     trend_filtered.append(name)
         if trend_filtered:
-            offense_close = pd.DataFrame({name: close[name] for name in trend_filtered})
-            rankings_series = composite_momentum(offense_close, p["momentum_short"], p["momentum_long"])
-            top_k = rankings_series.head(p["offense_top_k"])
-            rankings = [{"name": name, "score": float(score)} for name, score in top_k.items()]
-            offense_weights = {name: 1.0 / len(top_k) for name in top_k.index} if len(top_k) > 0 else {}
-        else:
-            rankings = []
-            offense_weights = {}
-    else:
-        rankings = []
-        offense_weights = {}
+            offense_weights = {name: 1.0 / len(trend_filtered) for name in trend_filtered}
+            rankings = [{"name": name} for name in trend_filtered]
 
     # 4b. 进攻层目标波动率缩放（与防御层对称）
     if offense_weights:
