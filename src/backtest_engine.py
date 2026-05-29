@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：run_backtest 日期从交集改为并集 + 动态 ETF 接入 + union_dates/get_available_etfs
 # [2026-05-28] 修改：run_backtest 传递 defense_ratio；parameter_scan 支持 checkpoint 持久化
 # [2026-05-27] 新增：回测引擎 — 日循环驱动 + 参数扫描入口
 
@@ -11,6 +12,34 @@ from src.signal_generator import generate_signal
 from src.portfolio_manager import allocate_capital
 from src.recorder import init_recorder, record_daily, get_records_df
 from src.benchmark import compute_benchmark, compute_single_benchmark
+
+
+def union_dates(prices: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
+    """返回所有 ETF 日期 index 的并集（非交集），按升序排列。"""
+    date_sets = [set(df.index) for df in prices.values() if len(df) > 0]
+    if not date_sets:
+        return pd.DatetimeIndex([])
+    all_dates = sorted(set.union(*date_sets))
+    return pd.DatetimeIndex(all_dates)
+
+
+def get_available_etfs(
+    prices: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+    min_history: int = 120,
+) -> list[str]:
+    """返回指定日期有数据且历史 ≥ min_history 的 ETF 名称列表。"""
+    available = []
+    for name, df in prices.items():
+        if len(df) == 0:
+            continue
+        if date not in df.index:
+            continue
+        # 该 ETF 在 date 之前（含）的数据天数
+        hist = (df.index <= date).sum()
+        if hist >= min_history:
+            available.append(name)
+    return available
 
 
 def run_backtest(
@@ -28,10 +57,8 @@ def run_backtest(
 
     返回绩效指标 dict，含 records_df 和 benchmark_nav。
     """
-    # 1. 日期范围：所有标的 index 的交集
-    date_sets = [set(df.index) for df in prices.values()]
-    common_dates = sorted(set.intersection(*date_sets))
-    dates = pd.DatetimeIndex(common_dates)
+    # 1. 日期范围：所有标的 index 的并集（动态 ETF 接入）
+    dates = union_dates(prices)
 
     if len(dates) <= min_days:
         raise ValueError(
@@ -56,14 +83,16 @@ def run_backtest(
             nav = sum(
                 positions.get(name, 0.0) * prices[name].loc[today, "close"]
                 for name in positions
+                if name in prices and today in prices[name].index
             )
             nav += repo_cash
 
         # 更新 nav_series
         nav_series.iloc[t] = nav
 
-        # 可见数据 + 信号 + 分配
-        visible_prices = {name: df.loc[:today] for name, df in prices.items()}
+        # 动态 ETF 接入：只传入当日有数据且满足 min_history 的 ETF
+        available_names = get_available_etfs(prices, today, min_history=min_days)
+        visible_prices = {name: prices[name].loc[:today] for name in available_names}
         signal = generate_signal(visible_prices, nav_series.iloc[: t + 1], params)
         defense_ratio = (params or {}).get("defense_ratio", 0.70)
         alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
@@ -71,6 +100,8 @@ def run_backtest(
         # 调仓：目标金额 → 股数（今日收盘价成交）
         positions = {}
         for name, target_dollar in alloc["positions"].items():
+            if name not in prices or today not in prices[name].index:
+                continue
             price = prices[name].loc[today, "close"]
             if price > 0:
                 positions[name] = target_dollar / price
