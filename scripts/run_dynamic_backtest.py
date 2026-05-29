@@ -175,8 +175,9 @@ def main():
         print(f"  总收益={strategy_fmt['总收益']}, 年化={strategy_fmt['年化']}, "
               f"Sharpe={strategy_fmt['Sharpe']}, 最大回撤={strategy_fmt['最大回撤']}")
 
-        # 保存净值序列
+        # 保存净值序列 + 完整日记录
         nav.to_csv(os.path.join(OUTPUT_DIR, f"nav_{label}.csv"), header=True)
+        records.to_csv(os.path.join(OUTPUT_DIR, f"records_{label}.csv"), header=True)
 
         # 三基准（从 result 提取，从 engine 返回的 benchmark Series）
         bench_metrics = {}
