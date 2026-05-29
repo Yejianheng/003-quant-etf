@@ -1,3 +1,4 @@
+# [2026-05-29] 新增：trend_filter_enabled 参数 — ablation 开关，关闭后防御/进攻全仓等权
 # [2026-05-29] 修改：进攻层切换为时间序列动量 — 取消截面排名，price>MA 即通过等权
 # [2026-05-29] 新增：进攻层绝对趋势过滤 — price > MA(trend_window) 才进入截面排名
 # [2026-05-28] 修改：trend_threshold/defense_ratio 参数化、进攻层波动率缩放、drawdown_stop 自定义阈值
@@ -27,6 +28,7 @@ DEFAULT_PARAMS = {
     "corr_sma_window": 5,
     "corr_threshold": 0.0,
     "trend_threshold": 0.0,
+    "trend_filter_enabled": True,
     "drawdown_thresholds": None,
     "defense_ratio": 1.00,
 }
@@ -48,7 +50,10 @@ def generate_signal(
     for name in DEFENSE_NAMES:
         if name in close:
             trend_strengths[name] = trend_strength(close[name], window=p["trend_window"])
-    active = [name for name, ts in trend_strengths.items() if ts > p["trend_threshold"]]
+    if p.get("trend_filter_enabled", True):
+        active = [name for name, ts in trend_strengths.items() if ts > p["trend_threshold"]]
+    else:
+        active = [name for name in DEFENSE_NAMES if name in close]
 
     # 3. 防御层目标波动率（等权参考权重）
     if active:
@@ -67,16 +72,21 @@ def generate_signal(
     offense_weights = {}
     rankings = []
     if offense_names:
-        trend_filtered = []
-        for name in offense_names:
-            series = close[name]
-            if len(series) >= p["trend_window"]:
-                ma = series.rolling(window=p["trend_window"]).mean()
-                if series.iloc[-1] > ma.iloc[-1]:
-                    trend_filtered.append(name)
-        if trend_filtered:
-            offense_weights = {name: 1.0 / len(trend_filtered) for name in trend_filtered}
-            rankings = [{"name": name} for name in trend_filtered]
+        if p.get("trend_filter_enabled", True):
+            trend_filtered = []
+            for name in offense_names:
+                series = close[name]
+                if len(series) >= p["trend_window"]:
+                    ma = series.rolling(window=p["trend_window"]).mean()
+                    if series.iloc[-1] > ma.iloc[-1]:
+                        trend_filtered.append(name)
+            if trend_filtered:
+                offense_weights = {name: 1.0 / len(trend_filtered) for name in trend_filtered}
+                rankings = [{"name": name} for name in trend_filtered]
+        else:
+            # 趋势过滤关闭 → 全仓等权
+            offense_weights = {name: 1.0 / len(offense_names) for name in offense_names}
+            rankings = [{"name": name} for name in offense_names]
 
     # 4b. 进攻层目标波动率缩放（与防御层对称）
     if offense_weights:
