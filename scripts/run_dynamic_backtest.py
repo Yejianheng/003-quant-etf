@@ -1,3 +1,4 @@
+# [2026-05-29] 修改：适配时间序列动量 — 取消 offense_top_k，简化为防御/进攻/混合三配置
 # [2026-05-29] 新增：动态 ETF 接入回测脚本 — 6 种配置 × 三基准对比
 
 import os
@@ -129,34 +130,25 @@ def main():
     all_prices = dict(defense_prices)
     all_prices.update(offense_prices)
 
-    # 配置列表
+    # 配置列表：纯防御 / 纯进攻 / 混合
     configs = [
-        ("纯防御", 1.0, 0),
-        ("K=2", 0.70, 2),
-        ("K=3", 0.70, 3),
-        ("K=4", 0.70, 4),
-        ("K=5", 0.70, 5),
-        ("K=6", 0.70, 6),
-        ("纯进攻 K=2", 0.0, 2),
-        ("纯进攻 K=3", 0.0, 3),
-        ("纯进攻 K=4", 0.0, 4),
-        ("纯进攻 K=5", 0.0, 5),
-        ("纯进攻 K=6", 0.0, 6),
+        ("纯防御", 1.0),
+        ("纯进攻", 0.0),
+        ("混合", 0.70),
     ]
 
     all_results = []
 
     print("\n[3/4] 运行回测（6 种配置）...")
 
-    for label, defense_ratio, top_k in configs:
+    for label, defense_ratio in configs:
         print(f"\n{'='*60}")
-        print(f"  {label}: defense_ratio={defense_ratio}, offense_top_k={top_k}")
+        print(f"  {label}: defense_ratio={defense_ratio}")
         print(f"{'='*60}")
 
         params = {
             **FIXED_PARAMS_BASE,
             "defense_ratio": defense_ratio,
-            "offense_top_k": top_k,
         }
 
         try:
@@ -206,7 +198,6 @@ def main():
         row = {
             "label": label,
             "defense_ratio": defense_ratio,
-            "offense_top_k": top_k,
         }
         for mk, mv in strategy_metrics.items():
             row[f"strategy_{mk}"] = mv
