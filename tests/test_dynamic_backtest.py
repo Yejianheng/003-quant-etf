@@ -127,9 +127,9 @@ class TestDynamicBacktest:
         offense_idx = pd.date_range("2024-06-01", "2024-10-15", freq="B")
         rng = np.random.RandomState(99)
         offense_r = rng.normal(0.0008, 0.002, len(offense_idx))
-        prices["酒ETF"] = _make_ohlcv(_price_series(offense_r, start_price=2.0))
+        prices["消费ETF"] = _make_ohlcv(_price_series(offense_r, start_price=2.0))
         # 重设 index 为 offense_idx
-        prices["酒ETF"].index = offense_idx
+        prices["消费ETF"].index = offense_idx
 
         result = run_backtest(prices, initial_capital=1_000_000, min_days=120)
         assert result["records_df"] is not None
@@ -176,7 +176,7 @@ class TestMissingDate:
         prices = _make_defense_prices(n=200, seed=42)
         rng = np.random.RandomState(99)
         gap_r = rng.normal(0.0008, 0.002, len(idx_gap))
-        prices["酒ETF"] = pd.DataFrame({
+        prices["消费ETF"] = pd.DataFrame({
             "open": np.ones(len(idx_gap)) * 1.98,
             "high": np.ones(len(idx_gap)) * 2.04,
             "low": np.ones(len(idx_gap)) * 1.96,
