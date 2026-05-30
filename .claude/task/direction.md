@@ -2,58 +2,40 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 执行纪律（强制）
+## 当前任务：每日数据更新脚本 + 一键运行串联
 
-**每步完成 → 验证通过 → 提交 → 再进行下一步。**
+### 步骤 1：写数据更新脚本 → 红灯 → 绿灯
 
----
+写 `tests/test_update_data.py`（3 场景）：
 
-## 当前任务：每日信号脚本 `scripts/daily_signal.py`
+- parquet 存在 → 追加新数据 → 行数增加、无重复日期
+- parquet 不存在 → 跳过不崩溃
+- AKShare 返回空 → 跳过不崩溃
 
-### 背景
+跑红后写 `scripts/update_data.py`：
 
-策略年均 15 次交易，手动执行完全可行。需要一个收盘后运行的脚本：读最新数据 → 算信号 → 告诉用户今天做什么。
+```python
+# 遍历 5 只 defense ETF parquet → fetch(最近10天) → 合并去重 → 存回
+```
 
-### 步骤 1：写测试 → 红灯
+### 步骤 2：更新 run_daily.bat
 
-写 `tests/test_daily_signal.py`，场景：
-
-**基础路径：**
-- 5 只 ETF 全部加载 → 生成信号 → 输出报告含趋势强度/熔断/回撤/目标持仓
-- 首次运行（无历史持仓状态文件）→ 输出"首次建仓"
-- 连续两天信号不变 → 输出"无需调仓"
-- 信号变化（某 ETF inactive）→ 输出"卖出"指令
-
-**边界：**
-- 仅 4 只 ETF parquet → 报错 exit code 1
-- 交易日 < 120 → 报错 exit code 1
-- 熔断触发 → 输出"全部清仓"
-
-**异常：**
-- 某 ETF parquet 缺失 → 跳过，不影响其余
-- data/ 目录无 parquet → 加载失败报错
-
-**跑 → 必须全红。** 因为 `scripts/daily_signal.py` 还不存在。
-
-### 步骤 2：写主代码 → 绿灯
-
-写 `scripts/daily_signal.py`，功能：
-- `load_prices()`：加载 defense 5 ETF 的 parquet
-- `generate_signal()`：调用现有引擎生成信号
-- `format_signal_report()`：格式化为可读中文报告
-- `main()`：入口，处理状态文件读写
-
-输出格式见顾问提供的代码框架。
-
-### 步骤 3：验证
-
-- 全量测试零回归
-- 用现有 parquet 实际运行一次，确认输出可读
+```bat
+@echo off
+cd /d "d:\AI项目\003-quant-etf"
+echo [1/2] 更新数据...
+python scripts/update_data.py
+echo.
+echo [2/2] 生成信号...
+python scripts/daily_signal.py
+pause
+```
 
 ### 验收
 
-- 脚本可用：`python scripts/daily_signal.py` 输出完整信号报告
-- 8 条新测试全绿 + 全量零回归
+- `update_data.py` 3 测试全绿
+- `run_daily.bat` 双击运行：先拉数据、再出信号
+- 全量测试零回归
 
 ---
 
