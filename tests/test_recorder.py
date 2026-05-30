@@ -12,6 +12,8 @@ def _make_signal(defense_active=None, offense_top=None, cb_triggered=False,
         "date": "2024-06-01",
         "defense": {
             "active": defense_active or ["沪深300", "创业板", "纳指", "黄金", "国债ETF"],
+            "scaling_factor": 1.0,
+            "predicted_vol": 0.10,
         },
         "offense": {
             "rankings": [{"name": n} for n in (offense_top or [])],

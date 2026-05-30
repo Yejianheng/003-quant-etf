@@ -1,3 +1,4 @@
+# [2026-05-30] 修改：defense 返回新增 predicted_vol — Vol Target 触发审计
 # [2026-05-29] 新增：vol_scaling_enabled 参数 — ablation 开关，关闭后固定等权不缩放
 # [2026-05-29] 新增：trend_filter_enabled 参数 — ablation 开关，关闭后防御/进攻全仓等权
 # [2026-05-29] 修改：进攻层切换为时间序列动量 — 取消截面排名，price>MA 即通过等权
@@ -64,6 +65,7 @@ def generate_signal(
         active = [name for name in DEFENSE_NAMES if name in close]
 
     # 3. 防御层目标波动率（等权参考权重）
+    predicted_vol = 0.0
     if active:
         active_close = pd.DataFrame({name: close[name] for name in active})
         raw_weights = np.ones(len(active)) / len(active)
@@ -145,6 +147,7 @@ def generate_signal(
             "active": active,
             "target_weights": defense_target_weights,
             "scaling_factor": sf,
+            "predicted_vol": predicted_vol,
         },
         "offense": {
             "rankings": rankings,

@@ -1,3 +1,4 @@
+# [2026-05-30] 修改：日记录新增 scaling_factor / predicted_vol — Vol Target 触发审计
 # [2026-05-27] 新增：Recorder — 回测日记录器，记录每天组合状态和信号
 
 import pandas as pd
@@ -35,6 +36,9 @@ def record_daily(
         "position_names": ";".join(position_names),
         "defense_active": ";".join(signal["defense"]["active"]),
         "offense_top": ";".join(offense_top),
+        "scaling_factor": signal["defense"]["scaling_factor"],
+        "predicted_vol": signal["defense"].get("predicted_vol", 0.0),
+        "defense_count": len(signal["defense"]["active"]),
     }
     recorder["records"].append(record)
 
