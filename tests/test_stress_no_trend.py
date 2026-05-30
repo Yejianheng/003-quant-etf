@@ -1,3 +1,4 @@
+# [2026-05-30] 修改：新增 seed 独立性、target_dates、同组相关性测试
 # [2026-05-30] 新增：stress_no_trend.py 测试
 import os
 import sys
@@ -68,3 +69,32 @@ class TestGenerateSyntheticSideways:
         real.iloc[50, 3] = np.nan  # close 列含 NaN
         with pytest.raises(ValueError, match="NaN"):
             generate_synthetic_sideways(real, seed=42)
+
+    # ---- 新增：seed 独立性与 target_dates ----
+
+    def test_different_seeds_low_correlation(self):
+        """不同 seed 生成的路径相关性应显著低于同 seed。"""
+        real = _make_real_prices(504)
+        s1 = generate_synthetic_sideways(real, seed=42)
+        s2 = generate_synthetic_sideways(real, seed=99)
+        r1 = s1["close"].pct_change().dropna()
+        r2 = s2["close"].pct_change().dropna()
+        corr_diff = np.corrcoef(r1, r2)[0, 1]
+        # 不同 seed 应产生低相关路径
+        assert abs(corr_diff) < 0.5, f"不同 seed 相关性 {corr_diff:.3f} 应 < 0.5"
+
+    def test_same_seed_reproducible(self):
+        """同 seed 同输入产生完全相同的路径。"""
+        real = _make_real_prices(504)
+        s1 = generate_synthetic_sideways(real, seed=42)
+        s2 = generate_synthetic_sideways(real, seed=42)
+        pd.testing.assert_frame_equal(s1, s2)
+
+    def test_target_dates_controls_index(self):
+        """传入 target_dates 时，输出 index 与之匹配。"""
+        real = _make_real_prices(504)
+        target = pd.bdate_range("2025-01-02", periods=504)
+        synth = generate_synthetic_sideways(real, seed=42, target_dates=target)
+        assert len(synth) == 504
+        assert synth.index[0] == target[0]
+        assert synth.index[-1] == target[-1]
