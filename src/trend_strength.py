@@ -35,3 +35,43 @@ def trend_strength(prices: pd.Series, window: int = 60) -> float:
     if ann_vol == 0.0:
         return 0.0
     return ann_ret / ann_vol
+
+
+def trend_confirmation(prices: pd.Series, method: str = "trend_strength", window: int = 40) -> bool:
+    """趋势确认机制开关——用指定方法判断是否处于上升趋势。
+
+    method:
+      - "trend_strength": 趋势强度 > 0（当前默认）
+      - "price_ma": close > MA(window)
+      - "dual_ma": MA(window//2) > MA(window)
+      - "ma_slope": MA(window) 斜率 > 0（今日 > window 日前）
+      - "breakout": close > 最高价(window)
+    """
+    if len(prices) < window:
+        return False
+
+    if method == "trend_strength":
+        return trend_strength(prices, window) > 0.0
+
+    elif method == "price_ma":
+        ma = prices.rolling(window=window).mean()
+        return bool(prices.iloc[-1] > ma.iloc[-1])
+
+    elif method == "dual_ma":
+        short_window = max(window // 2, 2)
+        ma_short = prices.rolling(window=short_window).mean()
+        ma_long = prices.rolling(window=window).mean()
+        return bool(ma_short.iloc[-1] > ma_long.iloc[-1])
+
+    elif method == "ma_slope":
+        ma = prices.rolling(window=window).mean().dropna()
+        if len(ma) < 2:
+            return False
+        return bool(ma.iloc[-1] > ma.iloc[0])
+
+    elif method == "breakout":
+        highest = prices.shift(1).rolling(window=window).max()
+        return bool(prices.iloc[-1] > highest.iloc[-1])
+
+    else:
+        return trend_strength(prices, window) > 0.0

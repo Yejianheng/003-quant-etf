@@ -8,7 +8,7 @@
 import numpy as np
 import pandas as pd
 
-from src.trend_strength import trend_strength
+from src.trend_strength import trend_strength, trend_confirmation
 from src.target_volatility import ewma_covariance, portfolio_volatility, scaling_factor
 from src.correlation_circuit_breaker import correlation_circuit_breaker
 from src.drawdown_stop import compute_drawdown, drawdown_stop
@@ -29,6 +29,7 @@ DEFAULT_PARAMS = {
     "corr_sma_window": 5,
     "corr_threshold": 0.0,
     "trend_threshold": 0.0,
+    "trend_confirmation_method": "trend_strength",
     "trend_filter_enabled": True,
     "vol_scaling_enabled": True,
     "covariance_method": "ewma",
@@ -54,7 +55,11 @@ def generate_signal(
         if name in close:
             trend_strengths[name] = trend_strength(close[name], window=p["trend_window"])
     if p.get("trend_filter_enabled", True):
-        active = [name for name, ts in trend_strengths.items() if ts > p["trend_threshold"]]
+        method = p.get("trend_confirmation_method", "trend_strength")
+        active = [
+            name for name in DEFENSE_NAMES
+            if name in close and trend_confirmation(close[name], method=method, window=p["trend_window"])
+        ]
     else:
         active = [name for name in DEFENSE_NAMES if name in close]
 
