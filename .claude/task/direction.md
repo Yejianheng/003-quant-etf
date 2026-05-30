@@ -8,76 +8,99 @@
 
 ---
 
-## 当前任务：修复 T+1 现金泄漏 + 重跑 Look-Ahead Bias
+## 步骤 1：样本外验证（5.1）
 
 ### 背景
 
-上次 look-ahead bias 验证（Sharpe 1.23 → 0.02）不可信。`src/backtest_engine.py` 的 T+1 实现存在现金泄漏 bug：
+当前所有参数（trend_window=40、ewma_lambda=0.94 等）在全量 2014-2026 上调出。必须拆开验证期确认不是过拟合。
 
-```python
-# line 162 — 当前（错误）
-repo_cash = exec_alloc["repo_amount"]
-```
+### 操作
 
-**泄漏机制**：
+开发期 2014-2020、验证期 2021-2026。在开发期内确定参数，验证期禁止调参，直接跑。
 
-```
-T 日：NAV = 1M → alloc = {positions: 600K, repo: 0} → 存入 pending_alloc
-T+1 日：持仓涨了 → NAV = 1.05M
-       exec_alloc = T 日 alloc = {positions: 600K, repo: 0}
-       → positions 只买 600K 股票 + repo_cash = 0
-       → 净值 600K，但 NAV 是 1.05M，50K 市值涨幅凭空消失
-```
+1. 在开发期（2014-2020）跑 trend_window [20, 40, 60, 80, 120]，看哪个最优
+2. 用最优参数跑验证期（2021-2026）
+3. 对比：
 
-每天泄漏当天市值变动量，12 年累积把策略漏穿。这不是真实的 look-ahead bias，是实现错误。
-
-### 步骤 1：修复现金泄漏
-
-修改 `src/backtest_engine.py` line 162 附近，将 `repo_cash` 从执行 alloc 取值改为**残差计算**：
-
-```python
-# 改后：现金 = NAV - 持仓市值（保证现金守恒）
-positions = {}
-if exec_alloc is not None:
-    for name, target_dollar in exec_alloc["positions"].items():
-        ...
-        positions[name] = target_dollar / price
-# repo_cash 总是残差，不依赖 alloc 来源
-positions_value = sum(
-    positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
-    for name in positions
-    if name in prices and exec_day in prices[name].index
-)
-repo_cash = nav - positions_value
-```
-
-注意 `nav` 是当天已更新的净值（line 111），`exec_day` 的收盘价用于计算持仓市值。
-
-同时修复 `pending_alloc` 初始化为 None 的问题：首日直接执行（不延迟），避免空仓期。
-
-### 步骤 2：重跑 Look-Ahead Bias
-
-修改 `scripts/check_lookahead_bias.py`（如需要更新参数），重跑全量 2014-2026 对比：
-
-| 指标 | 原版（T 日成交） | 修正版（T+1 成交） | 差异 |
-|------|---------------|-------------------|------|
-| 总收益 | | | |
-| Sharpe | | | |
+| 指标 | 开发期 2014-2020 | 验证期 2021-2026 | 全量 2014-2026 |
+|------|----------------|----------------|---------------|
+| 年化 | | | |
+| 波动率 | | | |
+| Sharpe | | | ← 关键：验证期 Sharpe 必须为正 |
 | 最大回撤 | | | |
 
-**预期**：纯防御 ΔSharpe < 0.05（MA40 对一日延迟不敏感）。
+### 验证问题
 
-### 步骤 3：决策
+- trend_window=40 是否只在全量数据上最优，还是在子区间也最优？
+- 验证期 Sharpe 是否仍 > 基准？如果验证期 Sharpe < 0，系统不可信。
 
-- ΔSharpe < 0.05 → 记录结论，引擎保持 T+0 默认，不改
-- ΔSharpe ≥ 0.05 → 分析差异来源，待顾问决策
+### 验收
 
-### 验收标准
-
-- 现金泄漏修复后，T+0 和 T+1 的净值曲线走势一致（差异 < 几个百分点）
-- 全量测试零回归
-- 明确量化真实的 look-ahead bias 量级
+验证期策略 Sharpe > 沪深300 Sharpe（最低标准），全量测试零回归。
 
 ---
 
-> 完成后写 outcome.md → 提示"请顾问窗口审查"。
+## 步骤 2：趋势确认机制对比（2.5）
+
+### 背景
+
+趋势过滤是唯二干活的模块（ΔSharpe +0.71），当前只用 Price > MA(40) 一种确认方式。可能存在更好的机制。
+
+### 操作
+
+在 `src/signal_generator.py` 或 `src/trend_strength.py` 新增机制开关（参数控制，不改默认行为），纯防御全量 2014-2026 对比：
+
+| 机制 | 规则 | Sharpe | 最大回撤 | Whipsaw | 2018收益 | 2022收益 |
+|------|------|--------|---------|---------|---------|---------|
+| Price > MA（当前） | close > MA(40) | | | | | |
+| Dual MA | MA(20) > MA(40) | | | | | |
+| MA slope | MA(40) 斜率 > 0 | | | | | |
+| Breakout | close > 最高价(40) | | | | | |
+
+### 验证问题
+
+- Price > MA 是不是四种里最好的？
+- 如果 Dual MA 或 MA slope 能减少 whipsaw 而不牺牲收益，就值得换。
+
+### 验收
+
+明确最优机制，全量测试零回归。
+
+---
+
+## 步骤 3：滑点与手续费（6.1）
+
+### 背景
+
+实盘有摩擦。当前回测零成本成交，需要加入后看策略还能不能活。
+
+### 操作
+
+修改 `src/backtest_engine.py`，新增 `slippage_bps` 参数（默认 0，不改生产行为），在调仓时扣除：
+
+```
+成交价 = close * (1 + slippage_bps/10000)  # 买入
+成交价 = close * (1 - slippage_bps/10000)  # 卖出
+```
+
+纯防御全量 2014-2026，扫描以下档位：
+
+| 场景 | 双边滑点 | 佣金 | 总摩擦 | Sharpe | 年化 | 最大回撤 |
+|------|---------|------|--------|--------|------|---------|
+| 理想 | 0bp | 0 | 0 | | | |
+| 乐观 | 5bp | 万2.5 | ~12.5bp | | | |
+| 中性 | 10bp | 万2.5 | ~22.5bp | | | |
+| 悲观 | 20bp | 万5 | ~45bp | | | |
+
+### 验证问题
+
+- 中性假设下策略 Sharpe 是否仍 > 基准？
+- 哪个摩擦档位策略开始不划算？
+
+### 验收
+
+明确摩擦影响量级，全量测试零回归。
+
+---
+
+> 三步全部完成后写 outcome.md → 提示"请顾问窗口审查"。
