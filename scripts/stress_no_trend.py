@@ -174,7 +174,7 @@ def _run_scenario(
     print(f"  股债相关性（沪深300 vs 国债ETF）：{stock_bond:.3f}")
 
     if not np.isnan(stock_bond) and abs(stock_bond) >= 0.5:
-        print(f"  ⚠ 股债相关性 {stock_bond:.3f} > 0.5，合成数据可能仍有问题")
+        print(f"  [WARN] 股债相关性 {stock_bond:.3f} > 0.5，合成数据可能仍有问题")
 
     result = run_backtest(
         prices=synth_prices,
@@ -222,7 +222,7 @@ def _run_scenario(
     print(f"  2 年总磨损：{total_return:.2%}")
     print(f"  年化失血率：{annual_return:.2%}")
     print(f"  Whipsaw 次数：{whips}")
-    print(f"  熔断触发占比：{circuit_days_ratio:.1%} {'⚠ 全程 repo!' if circuit_days_ratio > 0.8 else '✓'}")
+    print(f"  熔断触发占比：{circuit_days_ratio:.1%} {'[WARN] 全程 repo!' if circuit_days_ratio > 0.8 else '[OK]'}")
 
     records.to_csv(os.path.join(OUTPUT_DIR, f"records_stress_no_trend_{output_suffix}.csv"))
     return records
@@ -408,10 +408,10 @@ def main():
     for label, rec in [("A", records_a), ("B", records_b), ("C", records_c)]:
         _, _, _, _, cd = _extract(rec)
         if cd > 0.8:
-            print(f"  ❌ 场景{label} 熔断占比 {cd:.1%} > 80%，未通过")
+            print(f"  [FAIL] 场景{label} 熔断占比 {cd:.1%} > 80%，未通过")
             all_ok = False
         else:
-            print(f"  ✓ 场景{label} 熔断占比 {cd:.1%} ≤ 80%")
+            print(f"  [PASS] 场景{label} 熔断占比 {cd:.1%} <= 80%")
 
     if all_ok:
         print("  全部场景熔断占比验收通过。")
