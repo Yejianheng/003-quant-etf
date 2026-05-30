@@ -53,6 +53,8 @@ def run_backtest(
     params: dict | None = None,
     min_days: int = 120,
     execution_lag: int = 0,
+    slippage_bps: float = 0.0,
+    commission_rate: float = 0.0,
 ) -> dict:
     """运行完整回测。
 
@@ -61,6 +63,8 @@ def run_backtest(
     params: 传给 generate_signal 的参数。
     min_days: 最少需要的数据天数（trend_window + corr_window + sma_window 缓冲）。
     execution_lag: 0=信号当日成交（当前），1=T+1成交（修正 Look-Ahead Bias）。
+    slippage_bps: 双边滑点（bp），买入 close*(1+s/10000)，卖出 close*(1-s/10000)。
+    commission_rate: 佣金费率（如 0.00025 = 万2.5），按换手额收取。
 
     返回绩效指标 dict，含 records_df 和 benchmark_nav。
     """
@@ -141,35 +145,45 @@ def run_backtest(
 
         alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
 
-        # 调仓：目标金额 → 股数
+        # 调仓：目标金额 → 股数（含滑点 + 佣金）
         if execution_lag == 0:
-            # 信号当日成交：T 日信号 → T 日收盘价成交
             exec_day = today
             exec_alloc = alloc
         else:
-            # T+1 成交：T-1 日信号 → T 日收盘价成交
             if pending_alloc is None:
-                exec_alloc = alloc  # 首日直接执行，避免空仓期
+                exec_alloc = alloc
             else:
-                exec_alloc = pending_alloc  # 昨日信号
-            pending_alloc = alloc  # 今日信号留给明日
+                exec_alloc = pending_alloc
+            pending_alloc = alloc
             exec_day = today
 
+        prev_positions = positions.copy()
         positions = {}
+        total_commission = 0.0
         if exec_alloc is not None:
             for name, target_dollar in exec_alloc["positions"].items():
                 if name not in prices or exec_day not in prices[name].index:
                     continue
                 price = prices[name].loc[exec_day, "close"]
-                if price > 0:
-                    positions[name] = target_dollar / price
-        # repo_cash 总是残差（现金守恒，不依赖 alloc 来源）
+                if price <= 0:
+                    continue
+                # 买卖方向 → 执行价
+                current_value = prev_positions.get(name, 0.0) * price
+                if target_dollar > current_value:
+                    exec_price = price * (1.0 + slippage_bps / 10000.0)
+                else:
+                    exec_price = price * (1.0 - slippage_bps / 10000.0)
+                positions[name] = target_dollar / exec_price
+                # 佣金按换手额
+                turnover = abs(target_dollar - current_value)
+                total_commission += turnover * commission_rate
+        # repo_cash 总是残差（现金守恒，扣除佣金）
         positions_value = sum(
             positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
             for name in positions
             if name in prices and exec_day in prices[name].index
         )
-        repo_cash = nav - positions_value
+        repo_cash = nav - positions_value - total_commission
 
         # 日记录
         record_daily(
