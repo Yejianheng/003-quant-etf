@@ -1,3 +1,4 @@
+# [2026-05-30] 修复：repo_cash 改为残差计算（现金守恒）+ 首日直接执行避免空仓期 — T+1 现金泄漏
 # [2026-05-30] 新增：execution_lag 参数（0=当日成交，1=T+1成交）— Look-Ahead Bias 验证
 # [2026-05-29] 修改：修正回测起始日（≥防御全部就位）+ 清盘恢复机制（repo 利息 + 状态追踪）
 # [2026-05-29] 修改：run_backtest 日期从交集改为并集 + 动态 ETF 接入 + union_dates/get_available_etfs
@@ -147,7 +148,10 @@ def run_backtest(
             exec_alloc = alloc
         else:
             # T+1 成交：T-1 日信号 → T 日收盘价成交
-            exec_alloc = pending_alloc  # 昨日信号（首日为 None）
+            if pending_alloc is None:
+                exec_alloc = alloc  # 首日直接执行，避免空仓期
+            else:
+                exec_alloc = pending_alloc  # 昨日信号
             pending_alloc = alloc  # 今日信号留给明日
             exec_day = today
 
@@ -159,7 +163,13 @@ def run_backtest(
                 price = prices[name].loc[exec_day, "close"]
                 if price > 0:
                     positions[name] = target_dollar / price
-            repo_cash = exec_alloc["repo_amount"]
+        # repo_cash 总是残差（现金守恒，不依赖 alloc 来源）
+        positions_value = sum(
+            positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
+            for name in positions
+            if name in prices and exec_day in prices[name].index
+        )
+        repo_cash = nav - positions_value
 
         # 日记录
         record_daily(
