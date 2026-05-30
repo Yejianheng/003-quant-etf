@@ -8,57 +8,75 @@
 
 ---
 
-## 当前任务
+## 当前任务：修复 T+1 现金泄漏 + 重跑 Look-Ahead Bias
 
-### 步骤 1：修复 Ablation 汇总 — 切换为纯防御配置
+### 背景
 
-`scripts/ablation_summary.py` 的 `extract_mixed_row()` 只取 `配置 == "混合"`。当前系统已确认纯防御最优（defense_ratio=1.00），必须改用纯防御行。
+上次 look-ahead bias 验证（Sharpe 1.23 → 0.02）不可信。`src/backtest_engine.py` 的 T+1 实现存在现金泄漏 bug：
 
-**修改**：
-1. `extract_mixed_row()` → `extract_defense_row()`，过滤 `配置 == "纯防御"`
-2. 状态匹配字符串同步更新（`"有趋势过滤"` / `"无趋势过滤"` 等，纯防御行中状态列一致）
-3. 重跑 `python scripts/ablation_summary.py`
-4. 确认 `output/ablation_summary.csv` 中 Sharpe 基准为 1.23（纯防御），非 1.06（混合）
+```python
+# line 162 — 当前（错误）
+repo_cash = exec_alloc["repo_amount"]
+```
 
-**验收**：汇总表基准 Sharpe = 1.23，ΔSharpe 反映纯防御真实边际贡献。
+**泄漏机制**：
 
-### 步骤 2：更新 outcome.md
+```
+T 日：NAV = 1M → alloc = {positions: 600K, repo: 0} → 存入 pending_alloc
+T+1 日：持仓涨了 → NAV = 1.05M
+       exec_alloc = T 日 alloc = {positions: 600K, repo: 0}
+       → positions 只买 600K 股票 + repo_cash = 0
+       → 净值 600K，但 NAV 是 1.05M，50K 市值涨幅凭空消失
+```
 
-用纯防御结论覆盖当前 outcome.md：
+每天泄漏当天市值变动量，12 年累积把策略漏穿。这不是真实的 look-ahead bias，是实现错误。
 
-| 模块 | 有 Sharpe | 无 Sharpe | ΔSharpe | 有回撤 | 无回撤 | 结论 |
-|------|----------|----------|---------|--------|--------|------|
-| 1.2 趋势过滤 | 1.23 | 0.52 | +0.71 | -13.4% | -23.1% | 核心发动机 |
-| 1.3 波动率目标 | 1.23 | 1.23 | 0.00 | -13.4% | -13.4% | 纯防御中无影响（sf 始终=1.0，组合自然波动在容忍带内）|
-| 1.4 EWMA 协方差 | 1.23 | 1.23 | 0.00 | -13.4% | -13.4% | 纯防御中无影响（vol target 不触发，协方差方法无关）|
-| 1.5 相关性熔断 | 1.23 | 0.38 | +0.85 | -13.4% | -27.4% | 最强保护 |
+### 步骤 1：修复现金泄漏
 
-**关键结论**：纯防御中仅趋势过滤 + 熔断两个模块干活，vol target 和 EWMA 协方差 12 年零边际贡献（组合自然波动 ~11.4% 始终在 10% ± 1.5% 容忍带内）。
+修改 `src/backtest_engine.py` line 162 附近，将 `repo_cash` 从执行 alloc 取值改为**残差计算**：
 
-### 步骤 3：Look-Ahead Bias 验证
+```python
+# 改后：现金 = NAV - 持仓市值（保证现金守恒）
+positions = {}
+if exec_alloc is not None:
+    for name, target_dollar in exec_alloc["positions"].items():
+        ...
+        positions[name] = target_dollar / price
+# repo_cash 总是残差，不依赖 alloc 来源
+positions_value = sum(
+    positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
+    for name in positions
+    if name in prices and exec_day in prices[name].index
+)
+repo_cash = nav - positions_value
+```
 
-回测引擎 `src/backtest_engine.py` line 113-143：信号生成和成交使用同一 `today` 收盘价。实盘中不可行（收盘后才能看到收盘价）。
+注意 `nav` 是当天已更新的净值（line 111），`exec_day` 的收盘价用于计算持仓市值。
 
-**3a. 写 `scripts/check_lookahead_bias.py`**：
-- 原版：信号 T 日收盘 → 成交 T 日收盘（当前）
-- 修正版：信号 T 日收盘 → 成交 T+1 日收盘（延迟一日）
-- 全量 2014-2026 对比两版
+同时修复 `pending_alloc` 初始化为 None 的问题：首日直接执行（不延迟），避免空仓期。
 
-| 指标 | 原版 | 修正版 | 差异 |
-|------|------|--------|------|
+### 步骤 2：重跑 Look-Ahead Bias
+
+修改 `scripts/check_lookahead_bias.py`（如需要更新参数），重跑全量 2014-2026 对比：
+
+| 指标 | 原版（T 日成交） | 修正版（T+1 成交） | 差异 |
+|------|---------------|-------------------|------|
 | 总收益 | | | |
 | Sharpe | | | |
 | 最大回撤 | | | |
 
-**3b. 决策**：
-- Sharpe 差 < 0.05 → 记录结论，不改引擎
-- Sharpe 差 ≥ 0.05 → 修复 `backtest_engine.py` T+1 执行
+**预期**：纯防御 ΔSharpe < 0.05（MA40 对一日延迟不敏感）。
 
-**3c. 如修复**：验证信号对齐——确认 `generate_signal` 的 prices 参数不包含 T+1 日数据、成交价不早于信号日。
+### 步骤 3：决策
 
-### 步骤 4：清理工作区
+- ΔSharpe < 0.05 → 记录结论，引擎保持 T+0 默认，不改
+- ΔSharpe ≥ 0.05 → 分析差异来源，待顾问决策
 
-提交 ablation 产出的 `output/*.csv` 文件。
+### 验收标准
+
+- 现金泄漏修复后，T+0 和 T+1 的净值曲线走势一致（差异 < 几个百分点）
+- 全量测试零回归
+- 明确量化真实的 look-ahead bias 量级
 
 ---
 
