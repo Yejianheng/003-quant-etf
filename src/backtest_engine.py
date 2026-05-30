@@ -185,9 +185,13 @@ def run_backtest(
         )
         repo_cash = nav - positions_value - total_commission
 
-        # 日记录
+        # 日记录（含持仓明细，供 Golden Dataset 使用）
+        pos_detail = {name: positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
+                      for name in positions
+                      if name in prices and exec_day in prices[name].index}
         record_daily(
-            recorder, str(today.date()), nav, signal, alloc["positions"]
+            recorder, str(today.date()), nav, signal, alloc["positions"],
+            positions_detail=pos_detail,
         )
 
     # 4. 绩效指标
@@ -227,6 +231,7 @@ def run_backtest(
 
     return {
         "records_df": records_df,
+        "_recorder": recorder,
         "benchmark_nav": benchmark_nav,
         "benchmark_300": benchmark_300,
         "benchmark_chinext": benchmark_chinext,
