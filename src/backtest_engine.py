@@ -1,3 +1,4 @@
+# [2026-05-30] 修复：parameter_scan scalar_metrics 排除 _recorder/benchmark_* 序列，避免 CSV 字段超限
 # [2026-05-30] 修复：repo_cash 改为残差计算（现金守恒）+ 首日直接执行避免空仓期 — T+1 现金泄漏
 # [2026-05-30] 新增：execution_lag 参数（0=当日成交，1=T+1成交）— Look-Ahead Bias 验证
 # [2026-05-29] 修改：修正回测起始日（≥防御全部就位）+ 清盘恢复机制（repo 利息 + 状态追踪）
@@ -294,7 +295,8 @@ def parameter_scan(
         scalar_metrics = {
             k: v
             for k, v in bt.items()
-            if k not in ("records_df", "benchmark_nav")
+            if k not in ("records_df", "benchmark_nav", "_recorder",
+                         "benchmark_300", "benchmark_chinext", "benchmark_nasdaq")
         }
         results.append({**params, **scalar_metrics})
 
