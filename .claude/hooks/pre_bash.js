@@ -105,10 +105,20 @@ process.stdin.on("end", () => {
     if (fs.existsSync(ROLE_FILE)) {
       const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
       if (roleData.role === "advisor" || roleData.role === "consultant") {
-        // @claude-override-approved — 豁免 .claude/task/ 目录（协议文件：direction/outcome/recommendation）
+        // @claude-override-approved — 白名单精确匹配：顾问仅可操作 5 个协议文件
         const taskPaths = extractPaths(command);
         // @claude-override-approved — 修复：空路径=纯读命令，放行
-        const allTaskFiles = taskPaths.length === 0 || taskPaths.every(function(p) { return p.includes(".claude/task/"); });
+        const ADVISOR_WHITELIST = [
+          ".claude/role.json",
+          ".claude/next-session.md",
+          ".claude/task/direction.md",
+          ".claude/task/outcome.md",
+          ".claude/task/recommendation.md"
+        ];
+        const allTaskFiles = taskPaths.length === 0 || taskPaths.every(function(p) {
+          const np = p.replace(/\\/g, "/");
+          return ADVISOR_WHITELIST.some(function(f) { return np.endsWith(f); });
+        });
         if (!allTaskFiles) {
           console.error(
             "\n============================================" +

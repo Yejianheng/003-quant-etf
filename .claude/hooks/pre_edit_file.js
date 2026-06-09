@@ -26,9 +26,17 @@ process.stdin.on("end", () => {
     if (fs.existsSync(ROLE_FILE)) {
       const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
       if (roleData.role === "advisor" || roleData.role === "consultant") {
-        // @claude-override-approved — 豁免 .claude/task/ 目录（协议文件：direction/outcome/recommendation）
-        const isTaskFile = filePath.includes(".claude/task/");
-        if (!isTaskFile) {
+        // @claude-override-approved — 白名单精确匹配：顾问仅可写 5 个协议文件
+        const normalizedPath = filePath.replace(/\\/g, "/");
+        const ADVISOR_WHITELIST = [
+          ".claude/role.json",
+          ".claude/next-session.md",
+          ".claude/task/direction.md",
+          ".claude/task/outcome.md",
+          ".claude/task/recommendation.md"
+        ];
+        const isWhitelisted = ADVISOR_WHITELIST.some(function(f) { return normalizedPath.endsWith(f); });
+        if (!isWhitelisted) {
           console.error(
             "\n============================================" +
             "\n[角色门禁] 当前为顾问角色，禁止 Edit/Write！" +
