@@ -128,8 +128,8 @@ def _format_action(old_weights, new_weights, etf_names):
 
 
 def _build_table_data(records_df, etf_names):
-    """T+1 前移：records_df[0] 为 2025 末锚点（不显示），records_df[1:] 为 2026 数据。
-    X 日持仓来自 X-1 日 signal，操作比较 X-1 vs X-2 的 defense_active。"""
+    """权重 = 今日实际持仓（前日 signal 执行而来），操作 = 明日调仓（当日 signal vs 前日 signal）。
+    records_df[0] 为 2025 末锚点（不显示），records_df[1:] 为 2026 数据。"""
     first_nav = float(records_df.iloc[1]["nav"])
     rows = []
 
@@ -139,7 +139,7 @@ def _build_table_data(records_df, etf_names):
 
         date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
 
-        # --- 持仓权重（T+1 前移：X 日持仓来自 X-1 日 signal） ---
+        # --- 持仓权重 = 今日实际持股（昨日 signal → 今日执行） ---
         signal_row = records_df.iloc[i - 1]
         active_str = signal_row.get("defense_active", "")
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
@@ -151,13 +151,11 @@ def _build_table_data(records_df, etf_names):
         total_weight = sum(weights.values())
         cash = 1.0 - total_weight
 
-        # --- 操作列（T+1 前移） ---
-        if i == 1:
-            action = "建仓"
-        else:
-            new_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
-            old_weights = _defense_active_weights(records_df.iloc[i - 2], etf_names)
-            action = _format_action(old_weights, new_weights, etf_names)
+        # --- 操作列 = 明日将执行的调仓（当日信号 vs 前日信号） ---
+        # new_weights = 当日信号等权（明日将持）；old_weights = 前日信号等权（今日实际持）
+        new_weights = _defense_active_weights(row, etf_names)
+        old_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
+        action = _format_action(old_weights, new_weights, etf_names)
 
         # --- NAV（当日实际 NAV） ---
         nav = float(row["nav"]) / first_nav
@@ -293,7 +291,7 @@ def generate_html(
         <th>日期</th>
         <th>纯防御净值</th>
         <th>沪深300</th><th>创业板</th><th>纳指</th><th>黄金</th><th>国债ETF</th>
-        <th>现金</th><th>今日调仓</th><th>Δ%</th>
+        <th>现金</th><th>明日调仓</th><th>Δ%</th>
       </tr>
     </thead>
     <tbody></tbody>
