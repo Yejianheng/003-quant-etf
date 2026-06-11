@@ -114,7 +114,7 @@ def _format_action(old_weights, new_weights, etf_names):
             sold.append((name, old_w, new_w))
 
     if not sold and not bought:
-        return "—"
+        return "无需调仓"
 
     parts = []
     if sold:
@@ -152,16 +152,11 @@ def _build_table_data(records_df, etf_names):
         cash = 1.0 - total_weight
 
         # --- 操作列（T+1 前移） ---
-        if i == 0:
+        if i <= 1:
             action = "建仓"
         else:
-            # 新权重：第 i-1 条 signal
             new_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
-            if i == 1:
-                # 无第 i-2 条 → 旧权重全是 0
-                old_weights = {name: 0.0 for name in etf_names}
-            else:
-                old_weights = _defense_active_weights(records_df.iloc[i - 2], etf_names)
+            old_weights = _defense_active_weights(records_df.iloc[i - 2], etf_names)
             action = _format_action(old_weights, new_weights, etf_names)
 
         # --- NAV（不变，当日实际 NAV） ---
