@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：T+1 表格数据前移 + 操作列含权重变化（箭头格式）+ 表头改「今日调仓」
 # [2026-06-11] 修改：净值归一化除以首日 + 底部分页增加页码跳转
 # [2026-06-11] 修改：表格重做为持仓权重 + tooltip 移除自定义 callback 修复36行重复
 # [2026-06-11] 修改：输出路径改项目根 + 鼠标悬停6线净值 + 数据表格 + 日期搜索
@@ -100,54 +101,76 @@ def _dates_to_labels(index: pd.DatetimeIndex) -> list[str]:
     return [str(d.date()) for d in index]
 
 
+def _format_action(old_weights, new_weights, etf_names):
+    """格式化调仓操作文本：卖出 品种(旧%→新%), 买入 品种(旧%→新%)"""
+    sold = []
+    bought = []
+    for name in etf_names:
+        old_w = old_weights.get(name, 0.0)
+        new_w = new_weights.get(name, 0.0)
+        if new_w > old_w + 0.001:
+            bought.append((name, old_w, new_w))
+        elif old_w > new_w + 0.001:
+            sold.append((name, old_w, new_w))
+
+    if not sold and not bought:
+        return "—"
+
+    parts = []
+    if sold:
+        sold_str = '、'.join(f"{name}({old_w*100:.0f}%→{new_w*100:.0f}%)" for name, old_w, new_w in sold)
+        parts.append(f"卖出 {sold_str}")
+    if bought:
+        bought_str = '、'.join(f"{name}({old_w*100:.0f}%→{new_w*100:.0f}%)" for name, old_w, new_w in bought)
+        parts.append(f"买入 {bought_str}")
+
+    return "，".join(parts)
+
+
 def _build_table_data(records_df, etf_names):
-    """从 records_df 构建表格行数据（持仓权重 + 操作 + Δ%）。"""
+    """T+1 前移：X 日持仓来自 X-1 日 signal，操作比较 X-1 vs X-2 的 defense_active。"""
     first_nav = float(records_df.iloc[0]["nav"])
     rows = []
-    prev_positions = None
+
     for i, (_idx, row) in enumerate(records_df.iterrows()):
         date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
 
-        # 解析 defense_active → 等权分配
-        active_str = row.get("defense_active", "")
+        # --- 持仓权重（T+1 前移） ---
+        if i == 0:
+            signal_row = row
+        else:
+            signal_row = records_df.iloc[i - 1]
+
+        active_str = signal_row.get("defense_active", "")
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
         n_active = len(active)
         weights = {}
         for name in etf_names:
             weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
 
-        # 现金 = 1 - 持仓权重合计
         total_weight = sum(weights.values())
         cash = 1.0 - total_weight
 
-        # 净值归一化（对齐图表 Y 轴从 1.0 起）
+        # --- 操作列（T+1 前移） ---
+        if i == 0:
+            action = "建仓"
+        else:
+            # 新权重：第 i-1 条 signal
+            new_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
+            if i == 1:
+                # 无第 i-2 条 → 旧权重全是 0
+                old_weights = {name: 0.0 for name in etf_names}
+            else:
+                old_weights = _defense_active_weights(records_df.iloc[i - 2], etf_names)
+            action = _format_action(old_weights, new_weights, etf_names)
+
+        # --- NAV（不变，当日实际 NAV） ---
         nav = float(row["nav"]) / first_nav
         if i == 0:
             delta_nav = None
         else:
             prev_nav = float(records_df.iloc[i - 1]["nav"]) / first_nav
             delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
-
-        # 操作列：比较前后两日 position_names
-        position_str = row.get("position_names", "")
-        curr_positions = set(
-            p.strip() for p in position_str.split(";") if p.strip()
-        ) if position_str else set()
-
-        if prev_positions is None:
-            action = "—"
-        else:
-            added = curr_positions - prev_positions
-            removed = prev_positions - curr_positions
-            if not added and not removed:
-                action = "无需调仓"
-            else:
-                parts = []
-                if removed:
-                    parts.append(f"卖出 {'、'.join(sorted(removed))}")
-                if added:
-                    parts.append(f"买入 {'、'.join(sorted(added))}")
-                action = "；".join(parts)
 
         rows.append({
             "date": date_str,
@@ -158,9 +181,15 @@ def _build_table_data(records_df, etf_names):
             "delta": delta_nav,
         })
 
-        prev_positions = curr_positions
-
     return rows
+
+
+def _defense_active_weights(record_row, etf_names):
+    """从 record 行的 defense_active 解析等权权重。"""
+    active_str = record_row.get("defense_active", "")
+    active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
+    n_active = len(active)
+    return {name: 1.0 / n_active if name in active and n_active > 0 else 0.0 for name in etf_names}
 
 
 def generate_html(
@@ -272,7 +301,7 @@ def generate_html(
         <th>日期</th>
         <th>纯防御净值</th>
         <th>沪深300</th><th>创业板</th><th>纳指</th><th>黄金</th><th>国债ETF</th>
-        <th>现金</th><th>操作</th><th>Δ%</th>
+        <th>现金</th><th>今日调仓</th><th>Δ%</th>
       </tr>
     </thead>
     <tbody></tbody>

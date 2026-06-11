@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：适配 T+1 前移（操作→今日调仓、建仓、权重箭头格式）
 # [2026-06-11] 修改：适配净值归一化断言 + 页码跳转断言
 # [2026-06-11] 修改：适配持仓权重表格 + 新增表头验证
 # [2026-06-11] 修改：适配 output_path 参数 + 表格/翻页/搜索框元素验证
@@ -73,7 +74,7 @@ class TestNavChart:
         # 验证新表头：持仓权重列
         assert "纯防御净值" in html, "HTML 表头应包含 纯防御净值"
         assert "现金" in html, "HTML 表头应包含 现金"
-        assert "操作" in html, "HTML 表头应包含 操作"
+        assert "今日调仓" in html, "HTML 表头应包含 今日调仓"
         assert "Δ%" in html, "HTML 表头应包含 Δ%"
         # 验证翻页按钮
         assert "上一页" in html, "HTML 应包含 上一页 按钮"
@@ -139,13 +140,13 @@ class TestNavChart:
         # 新表头：10 列
         assert "纯防御净值" in html
         assert "现金" in html
-        assert "操作" in html
+        assert "今日调仓" in html
         # 不应再有旧表头
         assert "纯防御策略</th>" not in html, "旧表头「纯防御策略」应已被「纯防御净值」替代"
         # 表格数据 JSON 应含权重/现金/操作字段
         assert '"weights"' in html, "tableData JSON 应包含 weights 字段"
         assert '"cash"' in html, "tableData JSON 应包含 cash 字段"
         assert '"action"' in html, "tableData JSON 应包含 action 字段"
-        # 操作列应有实际内容
-        assert "无需调仓" in html or "买入" in html or "卖出" in html, \
+        # 操作列应有实际内容（建仓/权重箭头格式）
+        assert "建仓" in html or "买入" in html or "卖出" in html, \
             "操作列应包含调仓描述"
