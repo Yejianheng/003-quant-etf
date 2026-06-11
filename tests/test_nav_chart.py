@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：适配 output_path 参数 + 表格/翻页/搜索框元素验证
 # [2026-06-11] 新增：nav_chart 脚本测试 — 3 场景
 """测试 scripts/nav_chart.py — 2026 净值对比图表生成"""
 
@@ -39,20 +40,19 @@ class TestNavChart:
     """scripts/nav_chart.py 的单元测试"""
 
     def test_basic_generates_html_with_6_datasets(self, tmp_path):
-        """5 只 parquet 存在 → 生成 HTML，含 6 条 dataset"""
+        """5 只 parquet 存在 → 生成 HTML，含 6 条 dataset + 表格 + 翻页 + 搜索框"""
         data_dir = str(tmp_path / "data")
-        output_dir = str(tmp_path / "output")
+        output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_dir=output_dir)
+            main(data_dir=data_dir, output_path=output_path)
 
-        html_path = os.path.join(output_dir, "nav_2026.html")
-        assert os.path.exists(html_path), f"HTML 未生成: {html_path}"
+        assert os.path.exists(output_path), f"HTML 未生成: {output_path}"
 
-        html = open(html_path, encoding="utf-8").read()
+        html = open(output_path, encoding="utf-8").read()
         # 验证 6 组数据（策略 + 5 ETF）：Chart.js datasets 数组含 6 个对象
         dataset_count = len(re.findall(r'"label":\s*"', html))
         assert dataset_count >= 6, f"应有 ≥6 个 label（dataset），实际 {dataset_count}"
@@ -66,20 +66,27 @@ class TestNavChart:
         assert "2026 净值对比" in html
         # 验证盈亏线（灰色虚线）
         assert "borderDash" in html or "'afterDraw'" in html
+        # 验证表格元素
+        assert "<table" in html, "HTML 应包含 <table>"
+        # 验证翻页按钮
+        assert "上一页" in html, "HTML 应包含 上一页 按钮"
+        assert "下一页" in html, "HTML 应包含 下一页 按钮"
+        # 验证日期搜索框
+        assert 'type="date"' in html, "HTML 应包含日期选择器"
+        assert "跳转" in html, "HTML 应包含跳转按钮"
 
     def test_truncates_to_2026(self, tmp_path):
         """数据起点早于 2026-01-01 → 图表标签仅显示 2026-01-01 之后"""
         data_dir = str(tmp_path / "data")
-        output_dir = str(tmp_path / "output")
+        output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_dir=output_dir)
+            main(data_dir=data_dir, output_path=output_path)
 
-        html_path = os.path.join(output_dir, "nav_2026.html")
-        html = open(html_path, encoding="utf-8").read()
+        html = open(output_path, encoding="utf-8").read()
         # 提取 Chart.js labels 中的第一个日期
         match = re.search(r'"2026-01-0[2-9]"', html)
         assert match, f"HTML 中应包含 2026-01-02 之后的标签，实际未找到"
@@ -91,7 +98,7 @@ class TestNavChart:
     def test_missing_parquet_raises(self, tmp_path):
         """parquet 缺失 → FileNotFoundError，错误消息含缺失文件名"""
         data_dir = str(tmp_path / "data")
-        output_dir = str(tmp_path / "output")
+        output_path = str(tmp_path / "nav_2026.html")
         # 仅创建 4 只 parquet，缺 510300（沪深300）
         from src.signal_generator import DEFENSE_NAMES
         from src.etf_universe import ETF_UNIVERSE
@@ -106,4 +113,4 @@ class TestNavChart:
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.update_single_etf", mock_update):
             with pytest.raises(FileNotFoundError, match=missing_code):
-                main(data_dir=data_dir, output_dir=output_dir)
+                main(data_dir=data_dir, output_path=output_path)
