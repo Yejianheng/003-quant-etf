@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：表格重做为持仓权重 + tooltip 移除自定义 callback 修复36行重复
 # [2026-06-11] 修改：输出路径改项目根 + 鼠标悬停6线净值 + 数据表格 + 日期搜索
 # [2026-06-11] 新增：2026 净值对比图表脚本 — 纯防御策略 vs 5 ETF 买入持有
 """
@@ -98,43 +99,75 @@ def _dates_to_labels(index: pd.DatetimeIndex) -> list[str]:
     return [str(d.date()) for d in index]
 
 
-def _build_table_data(strategy_nav, etf_navs, names):
-    """构建表格行数据（净值 + 日环比 Δ%），对齐到策略净值日期。"""
-    dates = strategy_nav.index
+def _build_table_data(records_df, etf_names):
+    """从 records_df 构建表格行数据（持仓权重 + 操作 + Δ%）。"""
     rows = []
-    prev = None
-    for i, d in enumerate(dates):
-        navs = [float(strategy_nav.iloc[i])]
-        for name in names:
-            s = etf_navs.get(name)
-            if s is not None and d in s.index:
-                navs.append(float(s.loc[d]))
-            else:
-                navs.append(None)
-        if prev is None:
-            deltas = [None] * 6
+    prev_positions = None
+    for i, (_idx, row) in enumerate(records_df.iterrows()):
+        date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
+
+        # 解析 defense_active → 等权分配
+        active_str = row.get("defense_active", "")
+        active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
+        n_active = len(active)
+        weights = {}
+        for name in etf_names:
+            weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
+
+        # 现金 = 1 - 持仓权重合计
+        total_weight = sum(weights.values())
+        cash = 1.0 - total_weight
+
+        # 日收益率
+        nav = float(row["nav"])
+        if i == 0:
+            delta_nav = None
         else:
-            deltas = [
-                round((navs[j] - prev[j]) / prev[j] * 100, 2)
-                if (navs[j] is not None and prev[j] is not None and prev[j] != 0)
-                else None
-                for j in range(6)
-            ]
+            prev_nav = float(records_df.iloc[i - 1]["nav"])
+            delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
+
+        # 操作列：比较前后两日 position_names
+        position_str = row.get("position_names", "")
+        curr_positions = set(
+            p.strip() for p in position_str.split(";") if p.strip()
+        ) if position_str else set()
+
+        if prev_positions is None:
+            action = "—"
+        else:
+            added = curr_positions - prev_positions
+            removed = prev_positions - curr_positions
+            if not added and not removed:
+                action = "无需调仓"
+            else:
+                parts = []
+                if removed:
+                    parts.append(f"卖出 {'、'.join(sorted(removed))}")
+                if added:
+                    parts.append(f"买入 {'、'.join(sorted(added))}")
+                action = "；".join(parts)
+
         rows.append({
-            "date": str(d.date()),
-            "navs": [round(v, 4) if v is not None else None for v in navs],
-            "deltas": deltas,
+            "date": date_str,
+            "nav": round(nav, 4),
+            "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
+            "cash": round(cash, 4),
+            "action": action,
+            "delta": delta_nav,
         })
-        prev = navs
+
+        prev_positions = curr_positions
+
     return rows
 
 
 def generate_html(
     strategy_nav: pd.Series,
     etf_navs: dict[str, pd.Series],
+    records_df: pd.DataFrame,
     output_path: str,
 ) -> None:
-    """生成 Chart.js HTML 净值对比图（6 线 + 盈亏线 + 悬停浮窗 + 数据表 + 翻页 + 日期搜索）。"""
+    """生成 Chart.js HTML 净值对比图（6 线 + 盈亏线 + 悬停浮窗 + 持仓权重表 + 翻页 + 日期搜索）。"""
 
     labels = _dates_to_labels(strategy_nav.index)
     label_json = json.dumps(labels, ensure_ascii=False)
@@ -170,7 +203,7 @@ def generate_html(
 
     datasets_json = json.dumps(datasets, ensure_ascii=False)
 
-    table_data = _build_table_data(strategy_nav, etf_navs, DEFENSE_NAMES)
+    table_data = _build_table_data(records_df, DEFENSE_NAMES)
     table_data_json = json.dumps(table_data, ensure_ascii=False)
     total_pages = max(1, (len(table_data) + PAGE_SIZE - 1) // PAGE_SIZE)
 
@@ -205,6 +238,7 @@ def generate_html(
   thead tr:first-child th {{ border-top: none; }}
   tbody tr:hover td {{ background: #fafafa; }}
   tbody tr:hover td:first-child {{ background: #fafafa; }}
+  td.action-cell {{ text-align: left; white-space: pre-wrap; max-width: 200px; }}
   .pos {{ color: #d32f2f; }}
   .neg {{ color: #2e7d32; }}
   .pagination {{ display: flex; align-items: center; justify-content: center; gap: 16px;
@@ -234,8 +268,9 @@ def generate_html(
     <thead>
       <tr>
         <th>日期</th>
-        <th>纯防御策略</th><th>沪深300</th><th>创业板</th><th>纳指</th><th>黄金</th><th>国债ETF</th>
-        <th>纯防御Δ%</th><th>沪深300Δ%</th><th>创业板Δ%</th><th>纳指Δ%</th><th>黄金Δ%</th><th>国债ETFΔ%</th>
+        <th>纯防御净值</th>
+        <th>沪深300</th><th>创业板</th><th>纳指</th><th>黄金</th><th>国债ETF</th>
+        <th>现金</th><th>操作</th><th>Δ%</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -304,21 +339,7 @@ new Chart(document.getElementById('navChart'), {{
       }},
       tooltip: {{
         usePointStyle: true,
-        boxPadding: 4,
-        callbacks: {{
-          label: function(ctx) {{
-            const di = ctx.dataIndex;
-            const colNames = ['纯防御策略','沪深300','创业板','纳指','黄金','国债ETF'];
-            const lines = [];
-            for (let j = 0; j < datasets.length && j < 6; j++) {{
-              const v = datasets[j].data[di];
-              if (v !== undefined && v !== null) {{
-                lines.push(colNames[j] + '  ' + v.toFixed(4));
-              }}
-            }}
-            return lines;
-          }}
-        }}
+        boxPadding: 4
       }}
     }}
   }},
@@ -335,19 +356,19 @@ function renderTable() {{
     const row = tableData[i];
     html += '<tr>';
     html += '<td>' + row.date + '</td>';
-    for (let j = 0; j < 6; j++) {{
-      const v = row.navs[j];
-      html += '<td>' + (v !== null ? v.toFixed(4) : '—') + '</td>';
+    html += '<td>' + row.nav.toFixed(4) + '</td>';
+    for (let j = 0; j < 5; j++) {{
+      const w = row.weights[j];
+      html += '<td>' + (w > 0 ? (w * 100).toFixed(0) + '%' : '—') + '</td>';
     }}
-    for (let j = 0; j < 6; j++) {{
-      const d = row.deltas[j];
-      if (d === null) {{
-        html += '<td>—</td>';
-      }} else if (d >= 0) {{
-        html += '<td class="pos">+' + d.toFixed(2) + '%</td>';
-      }} else {{
-        html += '<td class="neg">' + d.toFixed(2) + '%</td>';
-      }}
+    html += '<td>' + (row.cash > 0 ? (row.cash * 100).toFixed(0) + '%' : '—') + '</td>';
+    html += '<td class="action-cell">' + row.action + '</td>';
+    if (row.delta === null) {{
+      html += '<td>—</td>';
+    }} else if (row.delta >= 0) {{
+      html += '<td class="pos">+' + row.delta.toFixed(2) + '%</td>';
+    }} else {{
+      html += '<td class="neg">' + row.delta.toFixed(2) + '%</td>';
     }}
     html += '</tr>';
   }}
@@ -417,7 +438,8 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
 
     # Step 3: 跑纯防御回测
     result = run_backtest(prices, params=DEFAULT_PARAMS)
-    strategy_nav_full = result["records_df"]["nav"]
+    records_df = result["records_df"]
+    strategy_nav_full = records_df["nav"]
 
     # Step 4: 截断到 2026-01-01 + 归一化
     strategy_nav = truncate_to_start(strategy_nav_full, START_DATE)
@@ -432,7 +454,8 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
             aligned_etf_navs[name] = nav.loc[common_dates]
 
     # Step 5: 生成 HTML
-    generate_html(strategy_nav, aligned_etf_navs, output_path)
+    records_2026 = records_df.loc[strategy_nav.index]
+    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path)
     print(f"净值对比图已生成：{output_path}")
 
 
