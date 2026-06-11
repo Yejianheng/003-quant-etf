@@ -107,7 +107,7 @@ process.stdin.on("end", () => {
       if (roleData.role === "advisor" || roleData.role === "consultant") {
         // @claude-override-approved — 白名单精确匹配：顾问仅可操作 5 个协议文件
         const taskPaths = extractPaths(command);
-        // @claude-override-approved — 修复：空路径=纯读命令，放行
+        // @claude-override-approved — 空路径不自动放行，必须匹配只读命令白名单
         const ADVISOR_WHITELIST = [
           ".claude/role.json",
           ".claude/next-session.md",
@@ -115,7 +115,20 @@ process.stdin.on("end", () => {
           ".claude/task/outcome.md",
           ".claude/task/recommendation.md"
         ];
-        const allTaskFiles = taskPaths.length === 0 || taskPaths.every(function(p) {
+        const ADVISOR_READONLY_CMDS = [
+          "git status", "git log", "git diff", "git show", "git stash",
+          "git branch", "git tag", "git remote", "git config",
+          "ls ", "dir ", "cat ", "head ", "tail ", "wc ",
+          "grep ", "find ", "which ", "type ", "where ",
+          "echo ", "pwd", "whoami", "date", "env", "printenv",
+          "node -v", "node --version", "python --version", "python -V",
+          "python3 --version", "python3 -V", "npm -v", "npm --version",
+          "tsc --version", "tsc -v", "tsc --noEmit",
+        ];
+        const cmdTrimmed = command.trim();
+        const isEmptyReadOnly = taskPaths.length === 0
+          && ADVISOR_READONLY_CMDS.some(function(p) { return cmdTrimmed.startsWith(p); });
+        const allTaskFiles = isEmptyReadOnly || taskPaths.every(function(p) {
           const np = p.replace(/\\/g, "/");
           return ADVISOR_WHITELIST.some(function(f) { return np.endsWith(f); });
         });
