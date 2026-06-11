@@ -82,6 +82,42 @@ src/
 
 以上 10 个核心引擎文件均受 `protected-files.json` Hook 保护。
 
+## 协作模式
+
+双窗口角色分工，Hook 强制执行边界。
+
+### 顾问窗口（触发词：`顾问`）
+
+- 信息检索：读代码、查日志、git status/log/diff
+- 分析决策：审查执行结果、判断审计报告、定技术方案
+- 任务调度：写 direction.md 分派任务
+- 写入权限：仅 5 个协议文件（role.json / next-session.md / direction.md / outcome.md / recommendation.md）
+- 禁止：改业务代码、跑脚本、git commit/push
+
+### 执行窗口（触发词：`执行`）
+
+- 读 direction.md，逐项执行，不询问确认
+- 写 outcome.md 汇报结果
+- 所有实际操作：跑脚本、改代码、git commit/push、写项目日志、发 release
+- 保护区文件修改走 audit 流程（validate → audit → 令牌放行）
+
+### 数据流
+
+```
+顾问窗口                    执行窗口
+  │                           │
+  ├─ 读/分析/决策             ├─ 读 direction.md
+  ├─ 写 direction.md ────────→├─ 执行任务
+  ├←──── 审查 outcome.md ─────┤
+  └─ 写 recommendation.md     └─ git commit/push
+```
+
+### 设计原则
+
+决策责任不可外包。顾问做技术判断，执行做精确操作。Hook 在两层之间强制执行边界——代价是流程绕一点，回报是零越界。
+
+---
+
 ## 快速开始
 
 ```bash
