@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：适配净值归一化断言 + 页码跳转断言
 # [2026-06-11] 修改：适配持仓权重表格 + 新增表头验证
 # [2026-06-11] 修改：适配 output_path 参数 + 表格/翻页/搜索框元素验证
 # [2026-06-11] 新增：nav_chart 脚本测试 — 3 场景
@@ -77,6 +78,8 @@ class TestNavChart:
         # 验证翻页按钮
         assert "上一页" in html, "HTML 应包含 上一页 按钮"
         assert "下一页" in html, "HTML 应包含 下一页 按钮"
+        assert "pageJumpInput" in html, "HTML 应包含页码跳转输入框"
+        assert "jumpToPage" in html, "HTML 应包含 jumpToPage 函数"
         # 验证日期搜索框
         assert 'type="date"' in html, "HTML 应包含日期选择器"
         assert "跳转" in html, "HTML 应包含跳转按钮"
