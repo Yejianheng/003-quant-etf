@@ -1,0 +1,6 @@
+{
+  "仓位": {
+    "script": "scripts/check_position.py",
+    "description": "更新数据 → 持仓报告 + 操作指令 + 更新图表"
+  }
+}
