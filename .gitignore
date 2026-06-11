@@ -15,3 +15,4 @@ logs/
 .claude/.gate/
 output/*.csv
 output/*.html
+nav_2026.html
