@@ -2,55 +2,105 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务 1：nav_chart.py 增强 — 输出路径 + 悬停 + 数据表
+## 任务 1：创建 `仓位` 三合一脚本
 
-### 修改 1：输出路径
+### 需求
 
-`output/nav_2026.html` → `nav_2026.html`（项目根目录）。
+新建 `scripts/check_position.py`。执行窗口输入 `仓位` 时，运行此脚本，一步完成三件事：
+1. 更新 5 ETF 数据
+2. 输出当前持仓 + 操作指令
+3. 更新 `nav_2026.html` 图表
 
-### 修改 2：鼠标悬停显示当日 6 线净值
+### 脚本行为
 
-Chart.js 配置：
-- `interaction.mode: 'index'`, `intersect: false`
-- tooltip label 显示 6 条线当日值（4 位小数），格式 `名称  N.NNNN`
+```
+$ python scripts/check_position.py
 
-### 修改 3：图表下方加净值数据表
+=== 2026-06-11 仓位报告 ===
 
-表结构（13 列）：
+【当前持仓】
+  沪深300    24.8%
+  创业板      21.3%
+  纳指        19.6%
+  黄金        —
+  国债ETF    34.3%
+  现金        0.0%
 
-| 日期 | 纯防御策略 | 沪深300 | 创业板 | 纳指 | 黄金 | 国债ETF | 纯防御Δ% | 沪深300Δ% | 创业板Δ% | 纳指Δ% | 黄金Δ% | 国债ETFΔ% |
-|------|-----------|--------|--------|------|------|--------|----------|----------|----------|------|------|----------|
+【操作指令】
+  无需调仓
 
-- 左侧固定：日期列 sticky
-- 右侧可横向滚动（"右侧栏杆"= 滚动条在右侧）
-- 每次显示 20 个交易日
-- 翻页：上一页 / 下一页 按钮，显示 "第 1/6 页"
-- 净值列 4 位小数，Δ% 列显示如 `+0.23%` / `-0.15%`，正绿负红
-- Δ% = (当日净值 - 前一日净值) / 前一日净值 × 100
+【风控状态】
+  趋势过滤：4/5 通过（黄金剔除）
+  波动率缩放：sf=1.18
+  相关性熔断：正常（-0.23）
+  回撤止损：normal（-3.2%）
 
-### 修改 4：日期搜索框
-
-表格上方放一个搜索组件：
-- 一个 `<input type="date">` 日期选择器
-- 一个 "跳转" 按钮
-- 选日期 → 跳转到包含该日期的 20 行分页
-
-### 数据来源
-
-所有净值数据从 `run_backtest()` 和 parquet 计算后，序列化为 JSON 嵌入 HTML（与现有 Chart.js 数据同源）。表格和图表共享同一份数据，不重复加载。
+图表已更新 → nav_2026.html
+```
 
 ### 实现方式
 
-纯 HTML + CSS + 原生 JS，不引入任何前端框架。内嵌在 `generate_html()` 中。
+```python
+# 复用现有模块
+from scripts.update_data import update_single_etf       # 更新数据
+from scripts.daily_signal import load_prices              # 加载数据
+from src.signal_generator import generate_signal, DEFAULT_PARAMS, DEFENSE_NAMES
+from src.etf_universe import ETF_UNIVERSE
+from scripts.nav_chart import main as update_chart        # 更新图表
+```
+
+步骤：
+1. 更新 5 ETF parquet（调 `update_single_etf`）
+2. 加载数据（调 `daily_signal.load_prices`）
+3. 生成信号（调 `generate_signal`）
+4. 格式化输出持仓报告（持仓比例 = signal['defense']['target_weights']）
+5. 输出操作指令（比较上一次 signal，调 `daily_signal._compare_signals`）
+6. 输出风控状态（熔断/回撤/趋势过滤状态）
+7. 调 `update_chart()` 生成 `nav_2026.html`
+
+### 输出格式
+
+- 持仓：`target_weights` 按比例显示，未持有的 ETF 标 `—`
+- 操作指令：`daily_signal._compare_signals()` 返回的动作列表
+- 风控：趋势过滤通过数、sf 值、熔断相关系数、回撤档位
+
+### 文件
+
+- 新建 `scripts/check_position.py`
+- 不修改任何现有文件
+- `nav_2026.html` 输出到项目根目录
 
 ### 测试
 
-- 适配现有 `tests/test_nav_chart.py`（输出路径变更 + 表格元素验证）
-- 验证 HTML 中包含 `<table>`、翻页按钮、日期搜索框
-- 全量 pytest 绿灯
+1. 先写 `tests/test_check_position.py`，红灯
+2. 覆盖：
+   - 基础：5 parquet 存在 → 脚本正常执行，输出含「仓位报告」「当前持仓」「操作指令」「nav_2026.html」
+   - 输出内容：含 5 只 ETF 名称
+   - 图表：确认根目录 nav_2026.html 被生成且包含 6 条 dataset
+3. 主代码写完后全量 pytest 绿灯
 
-### 约束
+### 优先级
 
-- 不新增依赖，纯 Chart.js CDN + 原生 JS
-- 策略线必须是 `run_backtest()` 输出
-- 不改 `daily_signal.py`（本次不涉及）
+P0，用户直接需求。
+
+---
+
+## 任务 2：创建命令注册表
+
+新建 `.claude/commands.json`，让执行窗口识别 `仓位` 命令：
+
+```json
+{
+  "仓位": {
+    "script": "scripts/check_position.py",
+    "description": "更新数据 → 持仓报告 + 操作指令 + 更新图表"
+  }
+}
+```
+
+执行者启动时读此文件。用户输入匹配到 key → 直接跑对应 script，不读 direction.md。
+
+### 文件
+
+- 新建 `.claude/commands.json`
+- 不修改任何现有文件
