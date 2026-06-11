@@ -13,3 +13,5 @@ htmlcov/
 .claude/settings.local.json
 logs/
 .claude/.gate/
+output/*.csv
+output/*.html
