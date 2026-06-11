@@ -42,6 +42,19 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \".claude/hooks/clear_role.sh\"",
+            "shell": "bash",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

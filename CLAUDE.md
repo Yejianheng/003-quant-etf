@@ -26,7 +26,7 @@ ETF 多资产动量轮动量化系统。利用动量因子驱动 ETF 轮动，AI
 
 新会话第一条消息匹配触发，只读指定文件、回复就位、停止。禁止额外操作。
 
-**顾问角色第一步强制写 `.claude/role.json`。执行角色无需操作 role 文件——Hook 始终从 `.claude/.gate/role.json`（人手管理）读取，终端默认 executor。**
+**顾问角色第一步强制写 `.claude/role.json` → `{"role":"advisor"}`。执行角色无需操作 role 文件。Hook 从 `.claude/role.json` 读取角色，`"advisor"` 时仅放行 5 文件白名单。**
 
 ### 顾问 `^顾问$`
 

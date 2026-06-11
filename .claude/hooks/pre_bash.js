@@ -100,7 +100,7 @@ process.stdin.on("end", () => {
   // ── 角色门禁：顾问角色禁止 Bash 操作 ── @claude-override-approved
   // [2026-05-29] 修改：豁免 .claude/task/ 目录，advisor 可操作协议文件 @claude-override-approved
   // @claude-override-approved
-  const ROLE_FILE = path.join(__dirname, "..", ".gate", "role.json"); // @claude-override-approved — Hook 读取 .gate/ 下人手管理的角色文件，终端始终 executor
+  const ROLE_FILE = path.join(__dirname, "..", "role.json"); // @claude-override-approved — Hook 读取 .claude/role.json，AI step 0 写入，Stop Hook 清除
   try {
     if (fs.existsSync(ROLE_FILE)) {
       const roleData = JSON.parse(fs.readFileSync(ROLE_FILE, "utf-8"));
