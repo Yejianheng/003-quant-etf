@@ -26,12 +26,7 @@
 
 ## 待处理
 
-- [ ] 子模块 ablation（1.2~1.5）：趋势过滤/vol target/EWMA/熔断 有无对比
-- [ ] 参数扫描（2.2~2.3）：EWMA λ + Vol Target 稳定区间
-- [ ] 趋势确认机制对比（2.5）：Price>MA vs Dual MA vs MA slope
-- [ ] 样本外验证（5.1）：开发期/验证期拆分
-- [ ] 滑点与手续费（6.1）
-- [ ] check_values.py AST 增强（支持 dict 嵌套值递归提取）
+（全部完成，无待处理项）
 
 ## 重要上下文
 
