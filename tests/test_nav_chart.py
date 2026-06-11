@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：适配持仓权重表格 + 新增表头验证
 # [2026-06-11] 修改：适配 output_path 参数 + 表格/翻页/搜索框元素验证
 # [2026-06-11] 新增：nav_chart 脚本测试 — 3 场景
 """测试 scripts/nav_chart.py — 2026 净值对比图表生成"""
@@ -68,6 +69,11 @@ class TestNavChart:
         assert "borderDash" in html or "'afterDraw'" in html
         # 验证表格元素
         assert "<table" in html, "HTML 应包含 <table>"
+        # 验证新表头：持仓权重列
+        assert "纯防御净值" in html, "HTML 表头应包含 纯防御净值"
+        assert "现金" in html, "HTML 表头应包含 现金"
+        assert "操作" in html, "HTML 表头应包含 操作"
+        assert "Δ%" in html, "HTML 表头应包含 Δ%"
         # 验证翻页按钮
         assert "上一页" in html, "HTML 应包含 上一页 按钮"
         assert "下一页" in html, "HTML 应包含 下一页 按钮"
@@ -114,3 +120,29 @@ class TestNavChart:
         with patch("scripts.nav_chart.update_single_etf", mock_update):
             with pytest.raises(FileNotFoundError, match=missing_code):
                 main(data_dir=data_dir, output_path=output_path)
+
+    def test_table_contains_weight_and_action_columns(self, tmp_path):
+        """表格列包含持仓权重 header（10 列：日期 + 净值 + 5 ETF + 现金 + 操作 + Δ%）。"""
+        data_dir = str(tmp_path / "data")
+        output_path = str(tmp_path / "nav_2026.html")
+        _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
+        mock_update = MagicMock()
+
+        from scripts.nav_chart import main
+        with patch("scripts.nav_chart.update_single_etf", mock_update):
+            main(data_dir=data_dir, output_path=output_path)
+
+        html = open(output_path, encoding="utf-8").read()
+        # 新表头：10 列
+        assert "纯防御净值" in html
+        assert "现金" in html
+        assert "操作" in html
+        # 不应再有旧表头
+        assert "纯防御策略</th>" not in html, "旧表头「纯防御策略」应已被「纯防御净值」替代"
+        # 表格数据 JSON 应含权重/现金/操作字段
+        assert '"weights"' in html, "tableData JSON 应包含 weights 字段"
+        assert '"cash"' in html, "tableData JSON 应包含 cash 字段"
+        assert '"action"' in html, "tableData JSON 应包含 action 字段"
+        # 操作列应有实际内容
+        assert "无需调仓" in html or "买入" in html or "卖出" in html, \
+            "操作列应包含调仓描述"
