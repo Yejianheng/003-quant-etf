@@ -1,3 +1,4 @@
+# [2026-06-11] 修改：净值归一化除以首日 + 底部分页增加页码跳转
 # [2026-06-11] 修改：表格重做为持仓权重 + tooltip 移除自定义 callback 修复36行重复
 # [2026-06-11] 修改：输出路径改项目根 + 鼠标悬停6线净值 + 数据表格 + 日期搜索
 # [2026-06-11] 新增：2026 净值对比图表脚本 — 纯防御策略 vs 5 ETF 买入持有
@@ -101,6 +102,7 @@ def _dates_to_labels(index: pd.DatetimeIndex) -> list[str]:
 
 def _build_table_data(records_df, etf_names):
     """从 records_df 构建表格行数据（持仓权重 + 操作 + Δ%）。"""
+    first_nav = float(records_df.iloc[0]["nav"])
     rows = []
     prev_positions = None
     for i, (_idx, row) in enumerate(records_df.iterrows()):
@@ -118,12 +120,12 @@ def _build_table_data(records_df, etf_names):
         total_weight = sum(weights.values())
         cash = 1.0 - total_weight
 
-        # 日收益率
-        nav = float(row["nav"])
+        # 净值归一化（对齐图表 Y 轴从 1.0 起）
+        nav = float(row["nav"]) / first_nav
         if i == 0:
             delta_nav = None
         else:
-            prev_nav = float(records_df.iloc[i - 1]["nav"])
+            prev_nav = float(records_df.iloc[i - 1]["nav"]) / first_nav
             delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
 
         # 操作列：比较前后两日 position_names
@@ -280,6 +282,11 @@ def generate_html(
 <div class="pagination">
   <button id="prevBtn" onclick="changePage(-1)">上一页</button>
   <span class="page-info" id="pageInfo">第 1/{total_pages} 页</span>
+  <span style="font-size:13px;color:#666;">到第</span>
+  <input type="number" id="pageJumpInput" min="1" max="{total_pages}" value="1"
+    style="width:50px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:13px;text-align:center;">
+  <span style="font-size:13px;color:#666;">页</span>
+  <button onclick="jumpToPage()">跳转</button>
   <button id="nextBtn" onclick="changePage(1)">下一页</button>
 </div>
 
@@ -377,12 +384,25 @@ function renderTable() {{
     '第 ' + currentPage + '/' + totalPages + ' 页';
   document.getElementById('prevBtn').disabled = currentPage <= 1;
   document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+  document.getElementById('pageJumpInput').value = currentPage;
 }}
 
 function changePage(delta) {{
   const newPage = currentPage + delta;
   if (newPage < 1 || newPage > totalPages) return;
   currentPage = newPage;
+  renderTable();
+  document.getElementById('navTable').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+}}
+
+function jumpToPage() {{
+  const input = document.getElementById('pageJumpInput');
+  const page = parseInt(input.value);
+  if (isNaN(page) || page < 1 || page > totalPages) {{
+    input.value = currentPage;
+    return;
+  }}
+  currentPage = page;
   renderTable();
   document.getElementById('navTable').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
 }}
