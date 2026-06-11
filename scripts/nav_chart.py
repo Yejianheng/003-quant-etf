@@ -128,19 +128,19 @@ def _format_action(old_weights, new_weights, etf_names):
 
 
 def _build_table_data(records_df, etf_names):
-    """T+1 前移：X 日持仓来自 X-1 日 signal，操作比较 X-1 vs X-2 的 defense_active。"""
-    first_nav = float(records_df.iloc[0]["nav"])
+    """T+1 前移：records_df[0] 为 2025 末锚点（不显示），records_df[1:] 为 2026 数据。
+    X 日持仓来自 X-1 日 signal，操作比较 X-1 vs X-2 的 defense_active。"""
+    first_nav = float(records_df.iloc[1]["nav"])
     rows = []
 
     for i, (_idx, row) in enumerate(records_df.iterrows()):
+        if i == 0:
+            continue  # anchor row, not displayed
+
         date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
 
-        # --- 持仓权重（T+1 前移） ---
-        if i == 0:
-            signal_row = row
-        else:
-            signal_row = records_df.iloc[i - 1]
-
+        # --- 持仓权重（T+1 前移：X 日持仓来自 X-1 日 signal） ---
+        signal_row = records_df.iloc[i - 1]
         active_str = signal_row.get("defense_active", "")
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
         n_active = len(active)
@@ -152,20 +152,17 @@ def _build_table_data(records_df, etf_names):
         cash = 1.0 - total_weight
 
         # --- 操作列（T+1 前移） ---
-        if i <= 1:
+        if i == 1:
             action = "建仓"
         else:
             new_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
             old_weights = _defense_active_weights(records_df.iloc[i - 2], etf_names)
             action = _format_action(old_weights, new_weights, etf_names)
 
-        # --- NAV（不变，当日实际 NAV） ---
+        # --- NAV（当日实际 NAV） ---
         nav = float(row["nav"]) / first_nav
-        if i == 0:
-            delta_nav = None
-        else:
-            prev_nav = float(records_df.iloc[i - 1]["nav"]) / first_nav
-            delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
+        prev_nav = float(records_df.iloc[i - 1]["nav"]) / first_nav
+        delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
 
         rows.append({
             "date": date_str,
@@ -498,7 +495,14 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
             aligned_etf_navs[name] = nav.loc[common_dates]
 
     # Step 5: 生成 HTML
-    records_2026 = records_df.loc[strategy_nav.index]
+    # 包含 2025 末锚点行（T+1 前移需要前一交易日 signal）
+    start_dt = pd.Timestamp(START_DATE)
+    before = records_df[records_df.index < start_dt]
+    if len(before) > 0:
+        anchor = before.iloc[-1:]
+        records_2026 = pd.concat([anchor, records_df.loc[strategy_nav.index]])
+    else:
+        records_2026 = records_df.loc[strategy_nav.index]
     generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path)
     print(f"净值对比图已生成：{output_path}")
 
