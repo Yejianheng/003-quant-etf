@@ -457,7 +457,7 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
     prices = load_prices(data_dir)
 
     # Step 3: 跑纯防御回测
-    result = run_backtest(prices, params=DEFAULT_PARAMS)
+    result = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
     records_df = result["records_df"]
     strategy_nav_full = records_df["nav"]
 
