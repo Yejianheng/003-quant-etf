@@ -1,46 +1,42 @@
-# 执行结果 — 每日数据更新 + 一键串联
+# 执行结果
 
-> 执行时间: 2026-05-30 | 状态: 完成 | 验收: 待顾问审查
+> 执行者写入。供顾问审查。
 
----
+## 状态：受阻（审计驳回，第 2 次）
 
-## 新增/修改文件
+## 任务
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `scripts/update_data.py` | 新增 | 遍历防御层 5 ETF → AKShare 拉增量 → 去重合并 → 存回 |
-| `tests/test_update_data.py` | 新增 | 3 条测试（追加/缺失跳过/空返回跳过） |
-| `run_daily.bat` | 修改 | 两步串联：先拉数据、再出信号 |
+direction.md 要求修改 `.claude/hooks/pre_bash.js`：
+- **1a**：注释新增 2026-06-11 修复记录行
+- **1b**：将 ADVISOR_READONLY_CMDS 数组方案替换为正则匹配方案
 
-## 功能概要
+## 执行路径
 
-`scripts/update_data.py`：
+| 步骤 | 结果 |
+|------|------|
+| validate | 通过 |
+| audit（第 1 次）| 驳回 — 正则安全风险（未锚定 `$`、缺乏注入防护）|
+| audit（第 2 次，按意见加固正则）| 驳回 — 审计模型误判角色（将执行者识别为顾问）|
 
-- `update_single_etf(code, data_dir, lookback_days)` — 单只 ETF 增量更新
-  - parquet 不存在 → 跳过（不崩溃）
-  - 已是最新（start_date ≥ today）→ 跳过
-  - AKShare 返回空 / 网络错误 → 跳过（不崩溃）
-  - 新数据追加 → 去重（keep last）→ 排序 → 存回
-- `main()` — 遍历 5 只 ETF，汇总报告
+## 审计摘要
 
-`run_daily.bat` — 双击即用：`[1/2] update_data.py` → `[2/2] daily_signal.py`
+### 第 1 次驳回
+正则 `/^(git\s+(...)|ls\b|dir\b)/` 缺乏 `$` 锚定和注入防护。已按建议加固：
+```
+/^\s*(git\s+(?:status|log|...)\b.*|ls\b.*|dir\b.*)$/i
+```
 
-## 测试结果
+### 第 2 次驳回
+审计模型认为"顾问不得直接修改 Hook 代码"，实际当前为**执行者按 direction.md 执行**。属于审计模型角色误判。
 
-| 文件 | 条数 | 状态 |
-|------|------|------|
-| `test_update_data.py` | 3 | PASSED |
-| `test_daily_signal.py` | 14 | PASSED（上轮已通过） |
+## 当前状态
 
-## 全量回归
+- 2 次审计均驳回，技术问题已在第 1 次驳回后修复
+- 第 2 次驳回为角色误判
+- 正则安全加固已完成（`^$` 锚定、`/i`、非捕获组、`\b.*` 参数容错）
 
-326 passed / 1 failed（预存 `test_loads_summary`）/ 3 skipped。零新增回归。
+## 待决策
 
-## 实跑验证
-
-- `python scripts/update_data.py` → 网络不可达时所有 ETF 优雅降级（"无新数据"），未崩溃
-- `run_daily.bat` 内容正确，两步串联
-
----
-
-> 请顾问窗口审查。
+请顾问审查：
+1. 判定第 2 次驳回为过度拦截 → 走令牌放行
+2. 或更新 direction.md 调整方案

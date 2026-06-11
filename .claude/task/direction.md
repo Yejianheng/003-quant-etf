@@ -2,39 +2,51 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 当前任务：每日数据更新脚本 + 一键运行串联
+## 背景
 
-### 步骤 1：写数据更新脚本 → 红灯 → 绿灯
+顾问窗口通过 `python scripts/daily_signal.py` 绕过 Bash 门禁——命令无文件路径，`extractPaths` 返回空数组，`taskPaths.length === 0` 直接放行。审计 2 次驳回（第 1 次正则安全风险、第 2 次角色误判）。放弃正则方案，用模板已验证的数组方案。
 
-写 `tests/test_update_data.py`（3 场景）：
+## 任务
 
-- parquet 存在 → 追加新数据 → 行数增加、无重复日期
-- parquet 不存在 → 跳过不崩溃
-- AKShare 返回空 → 跳过不崩溃
+### 步骤 1：用模板覆盖 pre_bash.js
 
-跑红后写 `scripts/update_data.py`：
-
-```python
-# 遍历 5 只 defense ETF parquet → fetch(最近10天) → 合并去重 → 存回
+```bash
+cp "d:/AI项目/000-guard-mcp/项目开始规范/001-新项目模板/.claude/hooks/pre_bash.js" "d:/AI项目/003-quant-etf/.claude/hooks/pre_bash.js"
 ```
 
-### 步骤 2：更新 run_daily.bat
+模板使用 `ADVISOR_READONLY_CMDS` 数组 + `startsWith` 前缀匹配。无正则，无注入面。
 
-```bat
-@echo off
-cd /d "d:\AI项目\003-quant-etf"
-echo [1/2] 更新数据...
-python scripts/update_data.py
-echo.
-echo [2/2] 生成信号...
-python scripts/daily_signal.py
-pause
+### 步骤 2：validate
+
+```bash
+node d:/AI项目/000-guard-mcp/build/cli.js validate "模板 ADVISOR_READONLY_CMDS 数组方案覆盖，封堵顾问 Bash 绕过" --files .claude/hooks/pre_bash.js
 ```
 
-### 验收
+### 步骤 3：audit
 
-- `update_data.py` 3 测试全绿
-- `run_daily.bat` 双击运行：先拉数据、再出信号
+```bash
+node d:/AI项目/000-guard-mcp/build/cli.js audit ".claude/hooks/pre_bash.js" "d:/AI项目/003-quant-etf/.claude/hooks/pre_bash.js"
+```
+
+### 步骤 4：提交
+
+```bash
+git log --oneline -1  # 取最新序号，<序号> = 最新序号 + 1
+git add .claude/hooks/pre_bash.js .claude/task/direction.md
+git commit -m "v<序号>-20260611: 模板 pre_bash.js 覆盖，ADVISOR_READONLY_CMDS 数组封堵顾问 Bash 绕过"
+```
+
+### 步骤 5：清理
+
+direction.md 恢复模板（`[待填写]`）。
+
+---
+
+## 验证
+
+- 顾问角色 `git status` 放行
+- 顾问角色 `python scripts/daily_signal.py` 被拦截
+- 执行者角色不受影响
 - 全量测试零回归
 
 ---
