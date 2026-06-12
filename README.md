@@ -33,7 +33,7 @@ ETF 多资产动量轮动量化系统。AI 辅助纪律执行和标的筛选。�
 
 全部参数受 Hook 保护（`protected-contracts.json`），篡改需走 audit 流程。
 
-## 全量绩效（2014-2026）
+## 全量绩效（2014-2026，T+1 执行）
 
 | 指标 | **策略** | 沪深300 | 创业板 | 纳指 |
 |------|---------|--------|--------|------|
@@ -42,7 +42,26 @@ ETF 多资产动量轮动量化系统。AI 辅助纪律执行和标的筛选。�
 | Sharpe | **1.23** | 0.22 | 0.38 | 0.21 |
 | 最大回撤 | **-13.4%** | -46.3% | -69.6% | -85.5% |
 
-> T+1 执行修正后（消除 look-ahead bias）：Sharpe 1.06，仍全维度碾压三基准。
+> T+0（含 look-ahead bias）。T+1 执行修正后 Sharpe 1.02。
+
+### sf 漏洞（2026-06-12 发现并验证）
+
+**波动率缩放（Vol Target）存在代码缺陷：sf 被计算但从未被 `allocate_capital` 使用。** 信号链第 3 步算出 `scaling_factor`，第 6 步包装进 `final_multiplier`，但资金分配时只读了 `position_multiplier`（回撤乘数），sf 被丢弃。
+
+| | sf 未生效（当前代码） | sf 生效（修复后） | Δ |
+|---|---|---|---|
+| Sharpe | 1.017 | 1.130 | **+0.112** |
+| 总收益 | 275.2% | 204.4% | -70.8pp |
+| 最大回撤 | -13.91% | -8.74% | **+5.17pp** |
+| 年化波动率 | 11.52% | 8.66% | -2.86pp |
+
+**为什么有效**：sf = 0.10 / predicted_vol。高波动时自动缩仓（少亏），低波动时不加仓（被 dd_mult 兜底截断）。不对称纯防御——波动率聚集效应让 sf 在崩盘次日即降敞口，2020 年 COVID 崩盘期回撤从 -8.56% 砍到 -3.37%。
+
+**修复**：`portfolio_manager.py` L14 一行改动，`drawdown_stop["position_multiplier"]` → `execution["final_multiplier"]`。`final_multiplier = min(sf, dd_mult)` 已在 `signal_generator.py` 正确计算。
+
+**局限**：T+1 延迟（崩盘首日满仓）、低波动阴跌无效（sf≈1.0）、`target_vol_beta=0.10` 未扫参优化。理论地板从 -2.5 抬至约 -2.0。
+
+详见 [策略漏洞验证报告](strateg_漏洞验证_20260612.md)。
 
 ## 测试状态
 
@@ -126,6 +145,13 @@ pytest tests/ -v
 ```
 
 ## 版本
+
+### v184 — sf 漏洞发现与验证（2026-06-12）
+
+- **发现**：波动率缩放 sf 被计算但从未被 `allocate_capital` 使用，79% 交易日空转
+- **验证**：3 个独立脚本确认，修复后 Sharpe +0.112，回撤 -5.17pp
+- **交付**：`tests/test_verify_sf_not_applied.py` / `test_slow_bear.py` / `test_sf_enabled.py` + 完整验证报告
+- **修复**：`portfolio_manager.py` 一行改动（`position_multiplier` → `final_multiplier`），待下个版本执行
 
 ### v1.0 — 系统冻结（2026-05-30）
 

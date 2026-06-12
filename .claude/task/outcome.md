@@ -1,36 +1,46 @@
 # 执行结果
 
-**时间**：2026-06-12
-**任务**：T+1 表格数据前移 + 操作列含权重变化
+> 2026-06-12 | v181 direction 执行完毕
 
-## 完成清单
+## 任务：策略漏洞验证 — sf 生效 + 慢熊检测
 
-| 子任务 | 状态 | 说明 |
-|------|------|------|
-| T+1 数据前移 | ✅ | X 日持仓权重来自 X-1 日 signal，操作比较 X-1 vs X-2 的 defense_active |
-| 操作列权重格式 | ✅ | `卖出 A(33%→0), 买入 B(0→25%)、C(0→25%)` |
-| 表头改名 | ✅ | 「操作」→「今日调仓」 |
-| 首日建仓 | ✅ | 第 0 行 + 第 1 行（无 i-2）均显示「建仓」 |
-| 无调仓 | ✅ | 无变化显示 `—` |
-| 测试适配 | ✅ | 4/4 绿灯，零回归 |
+### 验证 1：sf 未生效 — 已确认
 
-## 改动文件
+- `allocate_capital` 只读取 `signal["drawdown_stop"]["position_multiplier"]`，从未读取 `signal["execution"]["final_multiplier"]`
+- 全量 3006 个交易日中，sf ≠ 1.0 占比 79.1%
+- 末端验证：sf=0.5216 时 exposure 仍为 1,000,000（应约为 521,628）
+- **结论：已验证，sf 从未被应用**
 
-- `scripts/nav_chart.py` — 重写 `_build_table_data()`、新增 `_format_action()` + `_defense_active_weights()`
-- `tests/test_nav_chart.py` — 「操作」→「今日调仓」、操作列断言更新
+### 验证 2：trend_strength 慢熊表现 — 部分成立
 
-## 关键实现细节
+- 纳指 2018 年 0 轴穿越 6 次，信号变化频率 29.8%（与全期 28.2% 接近）
+- Q1-Q2 存在趋势模糊期（2-5 月纳指 trend_strength 在 ±0.5 摇摆）
+- A 股才是 2018 年真正弱项（沪深 300 positive 仅 21%），趋势过滤正确排除
+- price_ma 方法变化频率更高 (36.0%)，不优于 trend_strength
+- **结论：慢熊穿越不严重，暂不需要紧急修复**
 
-- **shift 逻辑**：`i=0` → 首日 signal；`i≥1` → `records_df.iloc[i-1]` 的 defense_active
-- **操作比较**：`i=0,1` → `"建仓"`；`i≥2` → `_format_action(old_weights, new_weights)`，old = i-2, new = i-1
-- **等权解析**：`_defense_active_weights()` 从 defense_active 分号分隔字符串解析 → `1/N` 等权
-- **权重格式**：卖出（旧%→新%）在前，买入在后，同方向顿号连接，方向间逗号分隔
+### 验证 3：sf 修复影响 — 净正向
 
-## 测试结果
+全量 2014-2026 (T+1)：
+- Sharpe: 1.017 → 1.130 (+0.112)
+- 总收益: 275.2% → 204.4% (-70.8pp)
+- 最大回撤: -13.91% → -8.74% (+5.17pp)
 
-```
-nav_chart: 4 passed
-全量: 334 passed, 1 failed (预存在/无关), 3 skipped
-```
+2020 年效果最明显：回撤从 -8.56% 降至 -3.37%
+**结论：sf 修复是净正向的，Sharpe 提升、回撤收窄**
 
-请顾问窗口审查。
+### 交付物
+
+- `tests/test_verify_sf_not_applied.py` — 验证 1 分析脚本
+- `tests/test_slow_bear.py` — 验证 2 慢熊分析脚本
+- `tests/test_sf_enabled.py` — 验证 3 sf 生效对比脚本
+- `strateg_漏洞验证_20260612.md` — 完整验证报告
+
+### 测试
+
+- 全量 pytest: 328 passed, 2 failed (test_nav_chart.py 预存失败，非本次引入), 1 skipped
+- 未修改任何 src/ 生产代码
+
+---
+
+**请顾问窗口审查。**
