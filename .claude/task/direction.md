@@ -2,39 +2,60 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务 1：净值归一化 + 底部分页跳转
+## 任务：策略漏洞验证 — sf 生效 + 慢熊检测
 
-### 修改 1：表格净值归一化
+### 背景
 
-`_build_table_data()` L122：`nav = float(row["nav"])` 是原始回测值（百万级），和图表 Y 轴（从 1.0 起）不一致。
+顾问审查发现两个策略漏洞，需要在**不修改现有生产代码**的前提下验证：
+1. 波动率缩放 sf 算出来了但没被 `allocate_capital` 应用
+2. 趋势过滤对慢熊不敏感（trend_strength 微正微负）
 
-修复：除以首日净值归一化。
+### 验证 1：sf 是否真的未生效
 
-```python
-first_nav = float(records_df.iloc[0]["nav"])
-...
-nav = float(row["nav"]) / first_nav
-```
+验证方式（只读分析，不改代码）：
 
-### 修改 2：底部分页增加页码跳转
+1. 对比 `signal["defense"]["scaling_factor"]` 与 `signal["execution"]["final_multiplier"]` 的差异
+2. 追踪 `allocate_capital` 源码，确认它只用 `drawdown_stop["position_multiplier"]`，没用 `execution["final_multiplier"]`
+3. 抽样 200 个交易日，统计 sf ≠ 1.0 的占比
+4. 如果 sf 确实被丢弃，输出「已验证，sf 从未被应用」
 
-表格下方翻页区域当前只有"上一页 / 第 X/N 页 / 下一页"。在总页数旁边加一个页码输入框 + 跳转按钮：
+### 验证 2：trend_strength 在慢熊场景的表现
 
-```
-上一页 | 第 1/6 页 | 到第 [__] 页 [跳转] | 下一页
-```
+1. 写一个独立的慢熊验证脚本 `scripts/test_slow_bear.py`：
+   - 从 parquet 加载 2018 年数据
+   - 统计 2018 年每日各 ETF 的 trend_strength 分布
+   - 统计 2018 年信号变化频率（与全期对比）
+   - 分析 2018 年纳指 trend_strength 在 0 上下穿越次数
 
-输入页码 → 点跳转 → `changePage(target - currentPage)`，超出范围提示"页码范围 1-N"。
+2. 可选：使用 `trend_confirmation(method="price_ma")` 重跑 2018 年信号（不改 DEFAULT_PARAMS，仅测试脚本传参），对比结果：
+   - 信号变化次数
+   - 累计收益差异
+   - 回撤差异
 
-### 文件
+### 验证 3（如果验证 1 确认 sf 未生效）
 
-- 修改 `scripts/nav_chart.py`
+写独立测试脚本 `scripts/test_sf_enabled.py`，在副本上验证 sf 生效后的影响：
+- 通过 params 传递参数（不改 DEFAULT_PARAMS）
+- 仅测纯防御配置
+- 对比 2018 年、2019 年、2020 年三年的差异
+- 全量对比 2014-2026
+
+### 输出
+
+所有结论写入 `strateg_漏洞验证_20260612.md`（项目根目录），含：
+1. sf 是否真的未生效 → 证据
+2. 慢熊 2018 年 trend_strength 穿越频率
+3. 两个修复的预期影响（如已测）
+
+### 约束
+
+- **不修改任何 src/ 下的生产代码**
+- **不修改 DEFAULT_PARAMS**
+- 所有测试通过传参覆盖
+- 测试脚本放 tests/ 目录
+- 验证报告放项目根目录
 
 ### 测试
 
-- 适配现有测试
+- 新增测试红灯 → 全绿
 - 全量 pytest 绿灯
-
-### 优先级
-
-P0。
