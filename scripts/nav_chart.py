@@ -1,3 +1,4 @@
+# [2026-06-12] 修改：新增 A(无sf)/B(sf+0.08)/50-50 三策略对比
 # [2026-06-11] 修改：T+1 表格数据前移 + 操作列含权重变化（箭头格式）+ 表头改「今日调仓」
 # [2026-06-11] 修改：净值归一化除以首日 + 底部分页增加页码跳转
 # [2026-06-11] 修改：表格重做为持仓权重 + tooltip 移除自定义 callback 修复36行重复
@@ -6,6 +7,7 @@
 """
 2026 净值对比图表生成脚本：拉取 5 ETF 数据 → 跑纯防御回测 → 生成 HTML 净值对比图。
 
+三策略：A=无sf(beta=0.10) / B=sf+0.08 / 50-50=各半日度再平衡
 用法：python scripts/nav_chart.py
 输出：nav_2026.html
 """
@@ -28,12 +30,14 @@ START_DATE = "2026-01-01"
 PAGE_SIZE = 20
 
 COLORS = {
-    "纯防御策略": "#dc3912",
+    "50/50 组合": "#dc3912",
+    "纯防御(A) 无sf": "#ff9900",
+    "纯防御(B) sf+0.08": "#109618",
     "沪深300": "#3366cc",
-    "创业板": "#ff9900",
-    "纳指": "#109618",
-    "黄金": "#ffd700",
-    "国债ETF": "#990099",
+    "创业板": "#e06666",
+    "纳指": "#6aa84f",
+    "黄金": "#bf9000",
+    "国债ETF": "#674ea7",
 }
 
 
@@ -183,27 +187,56 @@ def _defense_active_weights(record_row, etf_names):
 
 
 def generate_html(
-    strategy_nav: pd.Series,
+    strategy_nav_50: pd.Series,
+    strategy_nav_a: pd.Series,
+    strategy_nav_b: pd.Series,
     etf_navs: dict[str, pd.Series],
     records_df: pd.DataFrame,
     output_path: str,
 ) -> None:
-    """生成 Chart.js HTML 净值对比图（6 线 + 盈亏线 + 悬停浮窗 + 持仓权重表 + 翻页 + 日期搜索）。"""
+    """生成 Chart.js HTML 净值对比图（3 策略 + 5 ETF + 盈亏线 + 持仓权重表 + 翻页 + 日期搜索）。"""
 
-    labels = _dates_to_labels(strategy_nav.index)
+    labels = _dates_to_labels(strategy_nav_50.index)
     label_json = json.dumps(labels, ensure_ascii=False)
 
     datasets = []
 
+    # 50/50 组合（主策略，粗线）
     datasets.append({
-        "label": "纯防御策略",
-        "data": _nav_to_json(strategy_nav),
-        "borderColor": COLORS["纯防御策略"],
-        "backgroundColor": COLORS["纯防御策略"],
+        "label": "50/50 组合",
+        "data": _nav_to_json(strategy_nav_50),
+        "borderColor": COLORS["50/50 组合"],
+        "backgroundColor": COLORS["50/50 组合"],
         "borderWidth": 3,
         "pointRadius": 0,
         "fill": False,
         "tension": 0,
+    })
+
+    # 纯防御 A（无 sf，虚线）
+    datasets.append({
+        "label": "纯防御(A) 无sf",
+        "data": _nav_to_json(strategy_nav_a),
+        "borderColor": COLORS["纯防御(A) 无sf"],
+        "backgroundColor": COLORS["纯防御(A) 无sf"],
+        "borderWidth": 1.5,
+        "pointRadius": 0,
+        "fill": False,
+        "tension": 0,
+        "borderDash": [6, 4],
+    })
+
+    # 纯防御 B（sf+0.08，虚线）
+    datasets.append({
+        "label": "纯防御(B) sf+0.08",
+        "data": _nav_to_json(strategy_nav_b),
+        "borderColor": COLORS["纯防御(B) sf+0.08"],
+        "backgroundColor": COLORS["纯防御(B) sf+0.08"],
+        "borderWidth": 1.5,
+        "pointRadius": 0,
+        "fill": False,
+        "tension": 0,
+        "borderDash": [2, 4],
     })
 
     for name in DEFENSE_NAMES:
@@ -465,43 +498,55 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
     主流程：
     1. 更新 5 ETF parquet
     2. 加载全量历史数据
-    3. 跑纯防御回测
+    3. 跑三策略回测：A(无sf) / B(sf+0.08) / 50-50 组合
     4. 截断到 2026-01-01 + 归一化
     5. 生成 HTML
     """
-    # Step 1: 更新数据
     update_all_etfs(data_dir)
-
-    # Step 2: 加载全量历史
     prices = load_prices(data_dir)
 
-    # Step 3: 跑纯防御回测
-    result = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
-    records_df = result["records_df"]
-    strategy_nav_full = records_df["nav"]
+    # 策略 A：无 sf, beta=0.10
+    result_a = run_backtest(prices, params={
+        "defense_ratio": 1.00, "target_vol_beta": 0.10,
+        "vol_scaling_enabled": False,
+    }, execution_lag=1)
+    nav_a_full = result_a["records_df"]["nav"]
 
-    # Step 4: 截断到 2026-01-01 + 归一化
-    strategy_nav = truncate_to_start(strategy_nav_full, START_DATE)
+    # 策略 B：sf 生效, beta=0.08
+    result_b = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
+    records_df = result_b["records_df"]
+    nav_b_full = records_df["nav"]
+
+    # 50/50 组合（日度再平衡）
+    common_idx = nav_a_full.index.intersection(nav_b_full.index)
+    nav_a_aligned = nav_a_full[common_idx]
+    nav_b_aligned = nav_b_full[common_idx]
+    nav_50_full = 0.5 * nav_a_aligned / nav_a_aligned.iloc[0] + 0.5 * nav_b_aligned / nav_b_aligned.iloc[0]
+    nav_50_full = nav_50_full * nav_a_aligned.iloc[0]  # restore scale
+
+    # 截断到 2026-01-01 + 归一化
+    strategy_nav_a = truncate_to_start(nav_a_full, START_DATE)
+    strategy_nav_b = truncate_to_start(nav_b_full, START_DATE)
+    strategy_nav_50 = truncate_to_start(nav_50_full, START_DATE)
     etf_navs = compute_etf_navs(prices, START_DATE)
 
-    # 对齐策略和 ETF 的日期标签：统一使用策略 nav 的 labels
-    strategy_dates = strategy_nav.index
+    # 对齐日期
+    strategy_dates = strategy_nav_b.index
     aligned_etf_navs = {}
     for name, nav in etf_navs.items():
-        common_dates = nav.index.intersection(strategy_dates)
-        if len(common_dates) > 0:
-            aligned_etf_navs[name] = nav.loc[common_dates]
+        cd = nav.index.intersection(strategy_dates)
+        if len(cd) > 0:
+            aligned_etf_navs[name] = nav.loc[cd]
 
-    # Step 5: 生成 HTML
-    # 包含 2025 末锚点行（T+1 前移需要前一交易日 signal）
+    # 表格用 B 策略的数据
     start_dt = pd.Timestamp(START_DATE)
     before = records_df[records_df.index < start_dt]
     if len(before) > 0:
         anchor = before.iloc[-1:]
-        records_2026 = pd.concat([anchor, records_df.loc[strategy_nav.index]])
+        records_2026 = pd.concat([anchor, records_df.loc[strategy_nav_b.index]])
     else:
-        records_2026 = records_df.loc[strategy_nav.index]
-    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path)
+        records_2026 = records_df.loc[strategy_nav_b.index]
+    generate_html(strategy_nav_50, strategy_nav_a, strategy_nav_b, aligned_etf_navs, records_2026, output_path)
     print(f"净值对比图已生成：{output_path}")
 
 
