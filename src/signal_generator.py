@@ -1,3 +1,4 @@
+# [2026-06-12] 修改：target_vol_beta 0.10→0.08（v184 扫描最优）
 # [2026-05-30] 修改：defense 返回新增 predicted_vol — Vol Target 触发审计
 # [2026-05-29] 新增：vol_scaling_enabled 参数 — ablation 开关，关闭后固定等权不缩放
 # [2026-05-29] 新增：trend_filter_enabled 参数 — ablation 开关，关闭后防御/进攻全仓等权
@@ -22,9 +23,9 @@ DEFAULT_PARAMS = {
     "momentum_short": 20,
     "momentum_long": 60,
     "offense_top_k": 3,
-    "target_vol_beta": 0.10,
+    "target_vol_beta": 0.08,
     "target_vol_alpha": 0.20,
-    "vol_tolerance": 0.015,
+    "vol_tolerance": 0.012,  # = target_vol_beta * 15%，等比缩放
     "ewma_lambda": 0.94,
     "corr_window": 60,
     "corr_sma_window": 5,

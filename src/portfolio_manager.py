@@ -1,3 +1,4 @@
+# [2026-06-12] 修复：sf 生效 — position_multiplier → final_multiplier（v184 验证通过）
 # [2026-05-27] 新增：组合管理器 — 信号→仓位转换层，资金路由
 
 def allocate_capital(
@@ -10,10 +11,10 @@ def allocate_capital(
     defense_pool = total_capital * defense_ratio
     offense_pool = total_capital * (1 - defense_ratio)
 
-    # 2. 回撤止损覆盖
-    dd_mult = signal["drawdown_stop"]["position_multiplier"]
-    defense_pool *= dd_mult
-    offense_pool *= dd_mult
+    # 2. 总仓位乘数 = min(sf, drawdown_multiplier)，已在 signal_generator 计算
+    final_mult = signal["execution"]["final_multiplier"]
+    defense_pool *= final_mult
+    offense_pool *= final_mult
 
     # 3. 相关性熔断 → 全部资金进逆回购
     if signal["circuit_breaker"]["triggered"]:

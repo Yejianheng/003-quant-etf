@@ -59,12 +59,12 @@ active ETF 等权分配：`weight_i = 1 / N_active`。
 ```
 trend_window = 40        # 趋势计算窗口
 ewma_lambda = 0.94       # EWMA 衰减因子 (RiskMetrics)
-target_vol_beta = 0.10   # 防御层目标波动率
+target_vol_beta = 0.08   # 防御层目标波动率（v184 边际换率最优）
 target_vol_alpha = 0.20  # 进攻层目标波动率（搁置中）
 defense_ratio = 1.00     # 防御资金占比（1.00=纯防御）
 corr_threshold = 0.0     # 股债相关性熔断阈值
 drawdown [0.08, 0.12, 0.18]  # 回撤三级阈值
-vol_tolerance = 0.015    # Vol Target 容忍带
+vol_tolerance = 0.012    # Vol Target 容忍带（= beta×15%，等比缩放）
 ```
 
 ### 策略特点总结

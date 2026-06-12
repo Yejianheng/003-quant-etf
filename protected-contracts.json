@@ -3,14 +3,14 @@
   "values": [
     {"file": "src/signal_generator.py", "key": "trend_window", "value": "40", "reason": "7点全量扫描最优(30-50窄带唯一存活窗口)，样本外验证通过，跨时间段稳定"},
     {"file": "src/signal_generator.py", "key": "ewma_lambda", "value": "0.94", "reason": "RiskMetrics标准"},
-    {"file": "src/signal_generator.py", "key": "target_vol_beta", "value": "0.10", "reason": "防御层10%目标波动"},
+    {"file": "src/signal_generator.py", "key": "target_vol_beta", "value": "0.08", "reason": "防御层8%目标波动（v184扫描最优，0.06→0.08边际换率1.05，前后半Sharpe均>0.85）"},
     {"file": "src/signal_generator.py", "key": "target_vol_alpha", "value": "0.20", "reason": "进攻层20%目标波动"},
     {"file": "src/signal_generator.py", "key": "defense_ratio", "value": "1.00", "reason": "纯防御最优，混合不如"},
     {"file": "src/drawdown_stop.py", "key": "dd_threshold_halve", "value": "0.08", "reason": "回撤≥8%减半仓位，三级阈值第一级"},
     {"file": "src/drawdown_stop.py", "key": "dd_threshold_warning", "value": "0.12", "reason": "回撤≥12%警告，三级阈值第二级"},
     {"file": "src/drawdown_stop.py", "key": "dd_threshold_liquidate", "value": "0.18", "reason": "回撤≥18%清仓，三级阈值第三级"},
     {"file": "src/signal_generator.py", "key": "corr_threshold", "value": "0.0", "reason": "相关性熔断阈值，ΔSharpe +0.85（最强模块），篡改可废掉最强防线"},
-    {"file": "src/signal_generator.py", "key": "vol_tolerance", "value": "0.015", "reason": "Vol Target容忍带±1.5%，缩放因子触发边界"}
+    {"file": "src/signal_generator.py", "key": "vol_tolerance", "value": "0.012", "reason": "Vol Target容忍带±1.2%（= beta×15%，等比缩放）"}
   ],
   "patterns": [
     {"pattern": "abs_dd < 0\\.0[0-7]\\b", "reason": "drawdown_stop: 禁止将halve阈值降到0.08以下（削弱风控）"},
