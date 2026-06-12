@@ -1,3 +1,4 @@
+# [2026-06-12] 新增：拆分/除权自动检测与修正（跌幅>50%触发，前复权）
 # [2026-05-27] 新增：数据管线 — AKShare → Parquet
 # [2026-05-27] 修改：save_to_parquet 自动创建目录（技术隐患 #3）
 # [2026-05-27] 修改：fetch_etf_daily 加代理绕过 + 重试 + 异常分类
@@ -78,6 +79,25 @@ def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date")
         df = df.sort_index()
+
+        # 拆分/除权检测：单日跌幅 > 50%，自动前复权修正
+        close = df["close"]
+        daily_ret = close.pct_change()
+        split_mask = daily_ret < -0.50
+        if split_mask.any():
+            for split_date in daily_ret[split_mask].index:
+                pre = close.loc[:split_date].iloc[-2]  # 拆前最后一天
+                post = close.loc[split_date]            # 拆后第一天
+                ratio = pre / post
+                logger.warning(
+                    f"检测到拆分 (code={code}, date={str(split_date)[:10]}): "
+                    f"拆前 close={pre:.3f}, 拆后 close={post:.3f}, "
+                    f"比例 1:{ratio:.2f}，自动前复权修正"
+                )
+                pre_mask = df.index < split_date
+                for col in ["open", "high", "low", "close"]:
+                    df.loc[pre_mask, col] = df.loc[pre_mask, col] / ratio
+
         return df
 
     return pd.DataFrame()
