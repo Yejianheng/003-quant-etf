@@ -1,8 +1,33 @@
 # 核心业务机制
 
-## 纯防御策略（当前唯一生效策略）
+## 实盘策略：50/50 A/B 组合（v186 确立）
 
-> **defense_ratio = 1.00，进攻层完全搁置。纯防御 ≠ 简单等权。**
+> **50% A（无 sf, beta=0.10）+ 50% B（sf+0.08），各自独立运行，不调仓。defense_ratio = 1.00，进攻层完全搁置。**
+
+### 为什么是组合而不是单一策略
+
+| | 纯A 无sf | 纯B sf+0.08 | **50/50 组合** |
+|---|---|---|---|
+| Sharpe | 1.017 | 1.206 | **1.108** |
+| 年化 | 11.72% | 9.05% | **10.47%** |
+| 最大回撤 | -13.91% | -7.45% | **-9.66%** |
+| 2018 | -8.6% | -3.6% | **-6.2%** |
+
+纯 B Sharpe 最高但牛市被 sf 拖累收益。纯 A 收益最高但回撤最大。50/50 取两者之长——低波动时享受 A 的满仓，高波动时获得 B 的保护。不调仓自带"牛熊自动切换权重"。
+
+### 等效单策略
+
+A 和 B 持有同一批 ETF，只是仓位乘数不同。组合总仓位等效乘数：
+
+```
+combined_mult = (dd_mult + final_mult) / 2
+              = (dd_mult + min(sf, dd_mult)) / 2
+```
+
+- **低波动（sf >= dd_mult）**：combined_mult = dd_mult，跟 A 一样满仓
+- **高波动（sf < dd_mult）**：combined_mult = (dd_mult + sf) / 2，居于 A/B 之间
+
+> 不需要跑两个账户。一个策略改乘数公式即可复现。
 
 ### 资产池（5 只 ETF）
 
@@ -28,9 +53,9 @@ active ETF 等权分配：`weight_i = 1 / N_active`。
 
 **Step 3 — EWMA 波动率缩放（`target_volatility.py`）**
 
-计算 active ETF 池的 EWMA 协方差矩阵（λ=0.94, 窗口 252 天）→ 组合预测波动率 → `scaling_factor = 0.10 / predicted_vol`。若 `|predicted - 0.10| ≤ 0.015` 则 sf=1.0（容忍带）。
+计算 active ETF 池的 EWMA 协方差矩阵（λ=0.94, 窗口 252 天）→ 组合预测波动率 → `scaling_factor = 0.08 / predicted_vol`。若 `|predicted - 0.08| ≤ 0.012` 则 sf=1.0（等比容忍带 = beta×15%）。
 
-> sf 可 >1（放大仓位）也可 <1（缩仓）。后续 `final_multiplier = min(sf, drawdown_multiplier)` 取保守值。
+> sf 仅缩仓不加仓（被 `final_multiplier = min(sf, dd_mult)` 截断）。防御层最终乘数 `combined_mult = (dd_mult + min(sf, dd_mult)) / 2`。
 
 **Step 4 — 股债相关性熔断（`correlation_circuit_breaker.py`）**
 
@@ -50,7 +75,8 @@ active ETF 等权分配：`weight_i = 1 / N_active`。
 **Step 6 — 资金路由（`portfolio_manager.py`）**
 
 - 熔断触发 → positions = {}，全部 repo
-- 正常 → 防御池 = total × defense_ratio × dd_multiplier → 按 target_weights 分配
+- 正常 → 防御池 = total × defense_ratio × combined_mult → 按 target_weights 分配
+  - `combined_mult = (dd_mult + final_mult) / 2 = (dd_mult + min(sf, dd_mult)) / 2`
 - 进攻池（offense_pool）= total × (1 - defense_ratio) = 0（因 defense_ratio=1.00）→ 进 repo
 - 剩余零钱 → repo
 
@@ -69,11 +95,13 @@ vol_tolerance = 0.012    # Vol Target 容忍带（= beta×15%，等比缩放）
 
 ### 策略特点总结
 
+- **A/B 组合**：50% 无 sf（满仓涨）+ 50% sf+0.08（缩仓防），不调仓，牛熊自动切换权重
 - **动态持仓**：不是固定 5 只等权。趋势过滤剔除弱势 ETF，可能持有 0-5 只。
-- **仓位缩放**：波动率目标会放大或缩小总仓位。
+- **仓位缩放**：波动率 > 8% 时 B 端缩仓，A 端满仓，组合居于中间
 - **极端避险**：股债同涨时全部清仓进逆回购。
 - **硬回撤止损**：回撤 ≥ 18% 强制清仓。
 - **进攻层零权重**：defense_ratio=1.00 意味着进攻层完全不参与。
+- **理论地板**：~ -2.0 Sharpe（涨跌停 + T+1 + 18% 止损 + sf 半保护锁死尾部）
 
 ### 进攻层状态
 
@@ -103,8 +131,8 @@ vol_tolerance = 0.012    # Vol Target 容忍带（= beta×15%，等比缩放）
 
 **ΔSharpe ≈ 0.17**：差值来自信号含当日收盘价带来的 1 日先知优势（趋势突破当日即可成交，延迟一日错过首日收益）。
 
-**T+1 的 Sharpe 1.02 仍远超三基准**（沪深300/创业板/纳指），策略未失效。T+0 的 1.19 是理论上限。
+**T+1 组合策略 Sharpe 1.108 仍远超三基准**（沪深300/创业板/纳指），策略未失效。T+0 的 1.19 是理论上限。
 
-**当前默认**：`run_backtest()` 默认 `execution_lag=0`。`nav_chart.py` 和 `check_position.py` 均使用此默认值。这意味着图表中「操作」列为当日信号当日执行，仅作为调仓意图参考，不等同于次日实际操作。
+**当前默认**：`run_backtest()` 默认 `execution_lag=0`。`nav_chart.py` 和 `check_position.py` 使用 `execution_lag=1`。图表为 T+1 真实可执行数据。
 
 **历史**：早期 Look-Ahead Bias 验证时 T+1 数据因现金泄漏 bug（repo_cash 取值错误）被压至 Sharpe 0.02。修复后 T+1 恢复至 1.02（commit `17aea9e` → `f88bcd6`）。此后未切换默认值，保持 T+0。
