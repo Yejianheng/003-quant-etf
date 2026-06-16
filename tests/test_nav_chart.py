@@ -1,3 +1,5 @@
+# [2026-06-16] 修改：去 A/B 参考线，颜色断言更新为 1 策略 + 5 ETF（6 色）
+# [2026-06-16] 修复：同步表头断言"今日调仓"→"明日调仓"+颜色断言匹配当前 COLORS
 # [2026-06-11] 修改：适配 T+1 前移（操作→今日调仓、建仓、权重箭头格式）
 # [2026-06-11] 修改：适配净值归一化断言 + 页码跳转断言
 # [2026-06-11] 修改：适配持仓权重表格 + 新增表头验证
@@ -58,12 +60,12 @@ class TestNavChart:
         html = open(output_path, encoding="utf-8").read()
         # 验证 6 组数据（策略 + 5 ETF）：Chart.js datasets 数组含 6 个对象
         dataset_count = len(re.findall(r'"label":\s*"', html))
-        assert dataset_count >= 6, f"应有 ≥6 个 label（dataset），实际 {dataset_count}"
+        assert dataset_count == 6, f"应有 6 个 dataset（1 策略 + 5 ETF），实际 {dataset_count}"
         # 验证 canvas 元素
         canvas_count = len(re.findall(r'<canvas\b', html, re.IGNORECASE))
         assert canvas_count >= 1, f"应有 ≥1 个 <canvas>，实际 {canvas_count}"
         # 验证颜色
-        for color in ["#dc3912", "#3366cc", "#ff9900", "#109618", "#ffd700", "#990099"]:
+        for color in ["#dc3912", "#3366cc", "#e06666", "#6aa84f", "#bf9000", "#674ea7"]:
             assert color in html, f"HTML 中应包含颜色 {color}"
         # 验证标题
         assert "2026 净值对比" in html
@@ -74,7 +76,7 @@ class TestNavChart:
         # 验证新表头：持仓权重列
         assert "纯防御净值" in html, "HTML 表头应包含 纯防御净值"
         assert "现金" in html, "HTML 表头应包含 现金"
-        assert "今日调仓" in html, "HTML 表头应包含 今日调仓"
+        assert "明日调仓" in html, "HTML 表头应包含 明日调仓"
         assert "Δ%" in html, "HTML 表头应包含 Δ%"
         # 验证翻页按钮
         assert "上一页" in html, "HTML 应包含 上一页 按钮"
@@ -140,7 +142,7 @@ class TestNavChart:
         # 新表头：10 列
         assert "纯防御净值" in html
         assert "现金" in html
-        assert "今日调仓" in html
+        assert "明日调仓" in html
         # 不应再有旧表头
         assert "纯防御策略</th>" not in html, "旧表头「纯防御策略」应已被「纯防御净值」替代"
         # 表格数据 JSON 应含权重/现金/操作字段
