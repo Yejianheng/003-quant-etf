@@ -1,3 +1,4 @@
+# [2026-06-16] 修改：fetch_etf_daily 新增新浪 fallback（东方财富不可达时自动切换）
 # [2026-06-12] 新增：拆分/除权自动检测与修正（跌幅>50%触发，前复权）
 # [2026-05-27] 新增：数据管线 — AKShare → Parquet
 # [2026-05-27] 修改：save_to_parquet 自动创建目录（技术隐患 #3）
@@ -30,8 +31,20 @@ def _patch_requests_no_proxy():
 _patch_requests_no_proxy()
 
 
+def _to_sina_symbol(code: str) -> str:
+    """ETF 代码转新浪格式（加 sh/sz 交易所前缀）。"""
+    # 5xxxxx = 上海, 1xxxxx = 深圳, 0xxxxx = 深圳
+    if code.startswith(("0", "1", "2")):
+        return f"sz{code}"
+    return f"sh{code}"
+
+
 def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
     """从 AKShare 拉取单只 ETF 日线，返回 pandas DataFrame。code: ETF 代码，如 "510300"."""
+    df = None
+    source = None  # "em" | "sina"
+
+    # 主源：东方财富（3 次重试 + 指数退避）
     for attempt in range(_MAX_RETRIES):
         try:
             df = ak.fund_etf_hist_em(
@@ -43,25 +56,39 @@ def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
         except Exception as e:
             delay = _RETRY_BASE_DELAY * (2 ** attempt)
             logger.warning(
-                f"AKShare 调用失败 (code={code}, attempt={attempt + 1}/{_MAX_RETRIES}): "
+                f"AKShare 东方财富调用失败 (code={code}, attempt={attempt + 1}/{_MAX_RETRIES}): "
                 f"{type(e).__name__}: {e}"
             )
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(delay)
-            else:
+                continue
+            # 最后一次重试也失败 → 切新浪
+            logger.warning(f"东方财富不可达，切换新浪源 (code={code})")
+            try:
+                sina_symbol = _to_sina_symbol(code)
+                df = ak.fund_etf_hist_sina(symbol=sina_symbol)
+                if df is not None and not df.empty:
+                    source = "sina"
+            except Exception as e2:
+                logger.error(f"新浪源也失败 (code={code}): {type(e2).__name__}: {e2}")
+            if source is None:
                 logger.error(
-                    f"AKShare 重试 {_MAX_RETRIES} 次后仍失败 (code={code})，返回空 DataFrame。"
-                    f"可能原因：网络不可达 / 东方财富限流 / VPN 干扰。"
+                    f"所有数据源均不可达 (code={code})，返回空 DataFrame。"
+                    f"可能原因：网络不可达 / 东方财富限流 / 新浪不可达。"
                 )
                 return pd.DataFrame()
-            continue
+            break  # Sina 成功，跳出循环进入数据归一化
 
-        # AKShare 调用成功
+        # 东方财富 try 成功
         if df is None or df.empty:
             logger.info(f"AKShare 返回空数据 (code={code}, {start_date}~{end_date})，"
                         f"可能是非交易日区间")
             return pd.DataFrame()
+        source = "em"
+        break
 
+    # === 数据归一化（两种源共用处理逻辑） ===
+    if source == "em":
         # 中文列名 → 英文
         df = df.rename(
             columns={
@@ -73,34 +100,39 @@ def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
                 "成交量": "volume",
             }
         )
-        cols = ["date", "open", "high", "low", "close", "volume"]
-        available = [c for c in cols if c in df.columns]
-        df = df[available]
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.set_index("date")
-        df = df.sort_index()
 
-        # 拆分/除权检测：单日跌幅 > 50%，自动前复权修正
-        close = df["close"]
-        daily_ret = close.pct_change()
-        split_mask = daily_ret < -0.50
-        if split_mask.any():
-            for split_date in daily_ret[split_mask].index:
-                pre = close.loc[:split_date].iloc[-2]  # 拆前最后一天
-                post = close.loc[split_date]            # 拆后第一天
-                ratio = pre / post
-                logger.warning(
-                    f"检测到拆分 (code={code}, date={str(split_date)[:10]}): "
-                    f"拆前 close={pre:.3f}, 拆后 close={post:.3f}, "
-                    f"比例 1:{ratio:.2f}，自动前复权修正"
-                )
-                pre_mask = df.index < split_date
-                for col in ["open", "high", "low", "close"]:
-                    df.loc[pre_mask, col] = df.loc[pre_mask, col] / ratio
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    available = [c for c in cols if c in df.columns]
+    df = df[available]
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")
+    df = df.sort_index()
 
-        return df
+    # Sina 返回全量数据，按请求日期范围截取
+    if source == "sina":
+        start = pd.Timestamp(start_date)
+        end = pd.Timestamp(end_date)
+        df = df.loc[start:end]
 
-    return pd.DataFrame()
+    # 拆分/除权检测：单日跌幅 > 50%，自动前复权修正
+    close = df["close"]
+    daily_ret = close.pct_change()
+    split_mask = daily_ret < -0.50
+    if split_mask.any():
+        for split_date in daily_ret[split_mask].index:
+            pre = close.loc[:split_date].iloc[-2]  # 拆前最后一天
+            post = close.loc[split_date]            # 拆后第一天
+            ratio = pre / post
+            logger.warning(
+                f"检测到拆分 (code={code}, date={str(split_date)[:10]}): "
+                f"拆前 close={pre:.3f}, 拆后 close={post:.3f}, "
+                f"比例 1:{ratio:.2f}，自动前复权修正"
+            )
+            pre_mask = df.index < split_date
+            for col in ["open", "high", "low", "close"]:
+                df.loc[pre_mask, col] = df.loc[pre_mask, col] / ratio
+
+    return df
 
 
 def save_to_parquet(df: pd.DataFrame, path: str) -> None:

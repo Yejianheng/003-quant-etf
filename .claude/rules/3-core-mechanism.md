@@ -119,6 +119,7 @@ vol_tolerance = 0.012    # Vol Target 容忍带（= beta×15%，等比缩放）
 | `src/portfolio_manager.py` | Step 6: 资金路由 |
 | `src/backtest_engine.py` | 日循环回测引擎 + 参数扫描 |
 | `src/etf_universe.py` | ETF 代码映射 |
+| `src/data_pipeline.py` | 数据管线（东方财富 + 新浪 fallback） |
 
 ### 执行延迟（execution_lag）— 新窗口必须了解
 
