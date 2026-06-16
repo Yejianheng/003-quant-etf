@@ -1,3 +1,4 @@
+# [2026-06-16] 修改：final_multiplier 落地 50/50 公式（v186 决策未实现，纯B→50/50）@claude-override-approved
 # [2026-06-12] 修改：target_vol_beta 0.10→0.08（v184 扫描最优）
 # [2026-05-30] 修改：defense 返回新增 predicted_vol — Vol Target 触发审计
 # [2026-05-29] 新增：vol_scaling_enabled 参数 — ablation 开关，关闭后固定等权不缩放
@@ -138,7 +139,7 @@ def generate_signal(
         final_multiplier = 0.0
         funds_to_repo = True
     else:
-        final_multiplier = min(sf, ds["position_multiplier"])
+        final_multiplier = (ds["position_multiplier"] + min(sf, ds["position_multiplier"])) / 2
         funds_to_repo = False
 
     return {
