@@ -4,26 +4,16 @@
 
 ## 完成项
 
-- [x] `.claude/rules/5-infrastructure.md` — 新增数据管线段落（双源+限流+拆分检测）
-- [x] `.claude/rules/3-core-mechanism.md` — 关键文件表补 `data_pipeline.py`
-- [x] `项目日志/2026-06-16.md` — 全天记录
-- [x] `git commit` → `f8abc9e`
-- [x] `git push origin master` → GitHub
-- [x] `nav_2026.html` — 图表已重跑
+- [x] `git add data/ .claude/task/outcome.md` — 暂存数据更新 + 前次 outcome
+- [x] `git commit` → `2716197` (`v189-20260616-2`)
+- [x] `git push origin master` → GitHub (`f8abc9e..2716197`)
 
-## Audit 报告
+## 变更概要
 
-| 文件 | 审计模型 | 结果 |
-|------|---------|------|
-| `.claude/rules/5-infrastructure.md` | Qwen3-Max | ✅ PASS |
-| `.claude/rules/3-core-mechanism.md` | Qwen3-Max | ✅ PASS |
-
-## 验收
-
-| 验收项 | 结果 |
-|--------|:--:|
-| 5-infrastructure.md 含数据管线段落 | ✅ |
-| 3-core-mechanism.md 关键文件表含 data_pipeline.py | ✅ |
-| 项目日志已写 | ✅ |
-| git commit + push 成功 | ✅ |
-| nav_2026.html 已更新 | ✅ |
+| 文件 | 变更 |
+|------|------|
+| data/159915.parquet | 数据更新至 2026-06-16 |
+| data/510300.parquet | 数据更新至 2026-06-16 |
+| data/511010.parquet | 数据更新至 2026-06-16 |
+| data/513100.parquet | 数据更新至 2026-06-16 |
+| .claude/task/outcome.md | 归档前次执行结果 |
