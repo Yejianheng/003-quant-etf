@@ -2,78 +2,65 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务：股债相关性熔断鲁棒性扫描
+## 任务：系统审计文件入必读 + 封存发布
 
 ### 背景
 
-熔断是系统最强防线（ablation ΔSharpe +0.85），但三个参数从未扫描：corr_window=60, corr_sma_window=5, corr_threshold=0.0。需回答：0.0 这个阈值脆弱吗？
+`attribution/system_audit.md` 是策略系统的完整技术文档，覆盖规则、决策链、绩效、仓位轨迹、压力测试、参数敏感度、成本、熔断鲁棒性、宏观经济分解。需设为新窗口必读文件。
 
-### 步骤 1：smoothed_corr 历史分布
+### 步骤 1：CLAUDE.md 增加必读引用
 
-```python
-from src.backtest_engine import run_backtest
-from src.signal_generator import DEFAULT_PARAMS
-import pandas as pd, numpy as np
-import copy
+修改 `CLAUDE.md`，在 "AI 核心指令" 段落中添加 `attribution/system_audit.md`：
 
-names=['沪深300','创业板','纳指','黄金','国债ETF']
-codes=['510300','159915','513100','518880','511010']
-prices={n:pd.read_parquet(f'data/{c}.parquet') for n,c in zip(names,codes)}
-
-# 跑一次全回测提取所有 smoothed_corr
-r = run_backtest(prices, 1000000, params=copy.deepcopy(DEFAULT_PARAMS))
-# 从 signal 中逐日提取... 需要修改 recorder 或从 backtest_engine 抓取
-
-# 或者：独立计算全期 smoothed_corr 序列（不用回测）
-from src.correlation_circuit_breaker import stock_basket_returns, rolling_correlation
-# 对每只股票计算 log 收益 → 等权篮子 → 与国债做 60 日滚动相关 → 5日 SMA
+```markdown
+> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、`方向性讨论.md`、`attribution/system_audit.md` 及 `.claude/rules/` 下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。
 ```
 
-输出：
-- smoothed_corr 的均值、标准差、min/max
-- 分位数：50%/75%/90%/95%/99%
-- 突破各阈值的交易日数：>0.0, >0.05, >0.1, >0.15, >0.2, >0.3
-- smoothed_corr 时序图数据（日期 + 值，存 CSV）
+### 步骤 2：打 release tag
 
-### 步骤 2：corr_threshold 敏感性扫描
+当前 HEAD 为 0.15 生产版本，含完整的四张表/缺口审计/系统审计/熔断扫描/宏观分解。打 tag：
 
-Patch signal_generator DEFAULT_PARAMS 的 corr_threshold，扫描：
-[-0.1, -0.05, 0.0, 0.05, 0.10, 0.15]
+```bash
+git tag -a v0.15-release f8abc9e~1..HEAD -m "
+【执行封闭版本】v0.15-release — 2026-06-18
 
-每档跑一次 `run_backtest()`，记录：Sharpe、年化、回撤、CB 触发天数、CB 触发占比。
+策略配置：
+  target_vol_beta=0.15（约束下收益最优），vol_tolerance=0.0225
+  50/50 A/B 公式，defense_ratio=1.00
+  备份参数: target_vol_beta=0.08（v0.08-canonical tag，Sharpe 最大化）
 
-输出对比表：
+绩效 (2014-2026, T+1):
+  年化 13.1%, 回撤 -13.1%, Sharpe 1.23
 
-| threshold | 触发天数 | 触发% | Sharpe | 年化 | 回撤 |
-|------|------|------|------|------|------|
+交付物：
+  attribution/system_audit.md — 系统审计（规则/决策链/绩效/仓位轨迹/压力/敏感度/熔断鲁棒性/宏观分解）
+  attribution/gap_audit.md — 缺口审计（7项关闭5项）
+  attribution/ — 四张表收益归因系统（7模块+7测试）
+  scripts/four_tables.py — 全量审计入口
+  scripts/nav_chart.py — 2026净值可视化（等权/60/40/repo/换手/成本）
+  scripts/corr_robustness_scan.py — 熔断三维扫描
+  scripts/macro_corr_decomposition.py — 股债相关性宏观分解
+  项目日志/2026-06-18.md — 全天记录
 
-### 步骤 3：corr_window 敏感性扫描
+封存说明：
+  本版本为执行封闭版本。策略逻辑完整，所有核心参数经过扫描验证。
+  后续改动应基于本版本的审计文件（system_audit.md）作为事实源。
+"
+```
 
-固定 corr_threshold=0.0, corr_sma_window=5，扫描：
-corr_window = [20, 40, 60, 90, 120]
+注意：tag 命令如果范围语法不支持，直接 `git tag -a v0.15-release HEAD -m "..."`。
 
-输出同上格式对比表。
+### 步骤 3：推送
 
-### 步骤 4：corr_sma_window 敏感性扫描
-
-固定 corr_threshold=0.0, corr_window=60，扫描：
-corr_sma_window = [1, 3, 5, 10, 20]
-
-输出同上格式对比表。
-
-### 步骤 5：结论写入
-
-将步骤 1-4 的结果写入 `attribution/system_audit.md`，替换 §5.4（未测敏感度）表格，新增 §5.5（熔断鲁棒性评估）。
+```bash
+git push origin master
+git push origin v0.15-release
+```
 
 ### 验收
 
-- [ ] smoothed_corr 全期分布统计完成
-- [ ] 三维扫描结果（threshold/window/sma）
-- [ ] `attribution/system_audit.md` 已更新
-- [ ] 确认阈值 0.0 的鲁棒裕量
-
-### 审核协议
-
-步骤 2-4 中 corr_window/corr_sma_window/corr_threshold 在 `protected-contracts.json` 为受保护值，需走内容级保护：
-1. 扫描脚本使用临时参数副本（不修改 DEFAULT_PARAMS），仅读取
-2. 如最终需修改生产值，走完整 CLI validate + audit 流程
+- [ ] CLAUDE.md 含 `attribution/system_audit.md` 引用
+- [ ] `v0.15-release` tag 存在且已推送
+- [ ] master 已推送
+- [ ] `git tag -l` 可见 `v0.08-canonical` + `v0.15-release` 两个 tag
+- [ ] 工作区干净

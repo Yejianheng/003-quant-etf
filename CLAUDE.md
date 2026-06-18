@@ -1,6 +1,6 @@
 # 003-quant-etf
 
-> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、`方向性讨论.md` 及 `.claude/rules/` 下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。
+> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、`方向性讨论.md`、`attribution/system_audit.md` 及 `.claude/rules/` 下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。@claude-override-approved
 
 ## 1. 项目目标
 
