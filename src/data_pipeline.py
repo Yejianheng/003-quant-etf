@@ -1,3 +1,4 @@
+# [2026-06-18] 新增：trim_isolated_dates — 剔除跨 ETF 不一致的孤立交易日
 # [2026-06-16] 修改：fetch_etf_daily 新增新浪 fallback（东方财富不可达时自动切换）
 # [2026-06-12] 新增：拆分/除权自动检测与修正（跌幅>50%触发，前复权）
 # [2026-05-27] 新增：数据管线 — AKShare → Parquet
@@ -144,3 +145,45 @@ def save_to_parquet(df: pd.DataFrame, path: str) -> None:
 def load_from_parquet(path: str) -> pd.DataFrame:
     """从 Parquet 读取 DataFrame，含 index。"""
     return pd.read_parquet(path)
+
+
+def trim_isolated_dates(etf_codes: list[str], data_dir: str = "data") -> int:
+    """剔除跨 ETF 不一致的孤立交易日（某只 ETF 有、另一只没有的日期）。
+
+    加载所有 parquet → 取日期交集 → 每只 ETF 只保留交集内的行 → 写回。
+    返回剔除的总行数。
+    """
+    import os as _os
+
+    # 加载全部
+    dfs = {}
+    for code in etf_codes:
+        path = _os.path.join(data_dir, f"{code}.parquet")
+        if not _os.path.exists(path):
+            continue
+        dfs[code] = load_from_parquet(path)
+
+    if len(dfs) < 2:
+        return 0
+
+    # 取日期交集
+    common_dates = set(dfs[list(dfs.keys())[0]].index)
+    for df in dfs.values():
+        common_dates = common_dates.intersection(set(df.index))
+    common_dates = sorted(common_dates)
+
+    # 剔除孤立日期 + 写回
+    total_removed = 0
+    for code, df in dfs.items():
+        before = len(df)
+        trimmed = df.loc[common_dates]
+        removed = before - len(trimmed)
+        if removed > 0:
+            path = _os.path.join(data_dir, f"{code}.parquet")
+            save_to_parquet(trimmed, path)
+            logger.info(f"  [{code}] 剔除 {removed} 行孤立日期，保留 {len(trimmed)} 行")
+        total_removed += removed
+
+    if total_removed > 0:
+        logger.info(f"trim_isolated_dates: 共剔除 {total_removed} 行，交集 {len(common_dates)} 天")
+    return total_removed

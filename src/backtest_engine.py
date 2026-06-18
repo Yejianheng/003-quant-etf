@@ -21,12 +21,22 @@ from src.benchmark import compute_benchmark, compute_single_benchmark
 REPO_ANNUAL_RATE = 0.02
 
 
-def union_dates(prices: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
-    """返回所有 ETF 日期 index 的并集（非交集），按升序排列。"""
+def union_dates(prices: dict[str, pd.DataFrame], min_etf_count: int | None = None) -> pd.DatetimeIndex:
+    """返回所有 ETF 日期 index 的并集（非交集），按升序排列。
+
+    min_etf_count: 若指定，只保留至少 min_etf_count 只 ETF 有数据的交易日。
+    """
     date_sets = [set(df.index) for df in prices.values() if len(df) > 0]
     if not date_sets:
         return pd.DatetimeIndex([])
     all_dates = sorted(set.union(*date_sets))
+    if min_etf_count is not None and min_etf_count > 1:
+        filtered = []
+        for d in all_dates:
+            count = sum(1 for ds in date_sets if d in ds)
+            if count >= min_etf_count:
+                filtered.append(d)
+        return pd.DatetimeIndex(filtered)
     return pd.DatetimeIndex(all_dates)
 
 
@@ -59,6 +69,7 @@ def run_backtest(
     slippage_bps: float = 0.0,
     commission_rate: float = 0.0,
     slippage_bps_map: dict[str, float] | None = None,
+    min_active_etfs: int = 1,
 ) -> dict:
     """运行完整回测。
 
@@ -70,6 +81,7 @@ def run_backtest(
     slippage_bps: 双边滑点（bp），买入 close*(1+s/10000)，卖出 close*(1-s/10000)。
     commission_rate: 佣金费率（如 0.00025 = 万2.5），按换手额收取。
     slippage_bps_map: per-ETF 双边滑点（bp），优先于 slippage_bps。不传则所有 ETF 使用 slippage_bps。
+    min_active_etfs: 交易日最少需要的 ETF 数量，低于此数则跳过当日。默认 1。
 
     返回绩效指标 dict，含 records_df 和 benchmark_nav。
     """
@@ -111,6 +123,24 @@ def run_backtest(
         # repo 现金日利息（年化 2% / 252）
         repo_cash *= (1.0 + REPO_ANNUAL_RATE / 252.0)
 
+        # 动态 ETF 接入：只传入当日有数据且满足 min_history 的 ETF
+        available_names = get_available_etfs(prices, today, min_history=min_days)
+
+        # 不完整交易日保护：可用 ETF 不足 → 跳过估值与调仓，NAV 保持前值
+        if len(available_names) < min_active_etfs:
+            nav_series.iloc[t] = nav
+            record_daily(
+                recorder, str(today.date()), nav,
+                {"execution": {"final_multiplier": 0.0},
+                 "defense": {"active": [], "scaling_factor": 0.0, "predicted_vol": 0.0},
+                 "offense": {"rankings": []},
+                 "circuit_breaker": {"triggered": False},
+                 "drawdown_stop": {"level": "normal", "drawdown": 0.0, "position_multiplier": 1.0}},
+                {},
+                positions_detail={},
+            )
+            continue
+
         # 估值：昨日持仓按今日收盘价重估
         if positions:
             nav = sum(
@@ -123,8 +153,6 @@ def run_backtest(
         # 更新 nav_series
         nav_series.iloc[t] = nav
 
-        # 动态 ETF 接入：只传入当日有数据且满足 min_history 的 ETF
-        available_names = get_available_etfs(prices, today, min_history=min_days)
         visible_prices = {name: prices[name].loc[:today] for name in available_names}
         signal = generate_signal(visible_prices, nav_series.iloc[: t + 1], params)
         defense_ratio = (params or {}).get("defense_ratio", 0.70)

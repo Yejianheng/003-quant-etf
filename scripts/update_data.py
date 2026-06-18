@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：更新完成后调用 trim_isolated_dates 剔除跨 ETF 不一致日
 # [2026-05-30] 新增：每日数据更新脚本 — 增量拉取 AKShare 数据追加到 parquet
 """
 每日数据更新脚本：遍历防御层 ETF parquet → 拉取最新数据 → 合并去重 → 存回。
@@ -12,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data_pipeline import fetch_etf_daily, load_from_parquet, save_to_parquet
+from src.data_pipeline import fetch_etf_daily, load_from_parquet, save_to_parquet, trim_isolated_dates
 from src.etf_universe import ETF_UNIVERSE
 
 
@@ -50,13 +51,17 @@ def update_single_etf(code: str, data_dir: str = "data", lookback_days: int = 10
 
 
 def main(data_dir: str = "data", lookback_days: int = 10) -> None:
-    """遍历全部防御层 ETF，增量更新。"""
+    """遍历全部防御层 ETF，增量更新，最后剔除跨 ETF 不一致的孤立交易日。"""
     codes = list(ETF_UNIVERSE.values())
     updated_count = 0
     for code in codes:
         if update_single_etf(code, data_dir, lookback_days):
             updated_count += 1
     print(f"更新完成：{updated_count}/{len(codes)} 只 ETF 有新数据")
+    # 剔除跨 ETF 不一致的孤立交易日（如部分 ETF 当天数据未出）
+    trimmed = trim_isolated_dates(codes, data_dir)
+    if trimmed > 0:
+        print(f"已剔除 {trimmed} 行孤立日期")
 
 
 if __name__ == "__main__":
