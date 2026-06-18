@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：适配等权基准 + 60/40 基准线（dataset 7→9, 颜色 +2, 表头 +2 列）
 # [2026-06-18] 新增：repo 可视化元素测试（逆回购净值虚线 + 空仓背景带 + repo 汇总）
 # [2026-06-16] 修改：去 A/B 参考线，颜色断言更新为 1 策略 + 5 ETF（6 色）
 # [2026-06-16] 修复：同步表头断言"今日调仓"→"明日调仓"+颜色断言匹配当前 COLORS
@@ -59,14 +60,14 @@ class TestNavChart:
         assert os.path.exists(output_path), f"HTML 未生成: {output_path}"
 
         html = open(output_path, encoding="utf-8").read()
-        # 验证 7 组数据（策略 + 逆回购 + 5 ETF）
+        # 验证 9 组数据（策略 + 逆回购 + 等权 + 60/40 + 5 ETF）
         dataset_count = len(re.findall(r'"label":\s*"', html))
-        assert dataset_count == 7, f"应有 7 个 dataset（1 策略 + 逆回购 + 5 ETF），实际 {dataset_count}"
+        assert dataset_count == 9, f"应有 9 个 dataset（1 策略 + 逆回购 + 等权 + 60/40 + 5 ETF），实际 {dataset_count}"
         # 验证 canvas 元素
         canvas_count = len(re.findall(r'<canvas\b', html, re.IGNORECASE))
         assert canvas_count >= 1, f"应有 ≥1 个 <canvas>，实际 {canvas_count}"
         # 验证颜色
-        for color in ["#dc3912", "#3366cc", "#e06666", "#6aa84f", "#bf9000", "#674ea7", "#999999"]:
+        for color in ["#dc3912", "#3366cc", "#e06666", "#6aa84f", "#bf9000", "#674ea7", "#999999", "#888888", "#8B4513"]:
             assert color in html, f"HTML 中应包含颜色 {color}"
         # 验证标题
         assert "2026 净值对比" in html
@@ -76,6 +77,8 @@ class TestNavChart:
         assert "<table" in html, "HTML 应包含 <table>"
         # 验证新表头：持仓权重列
         assert "纯防御净值" in html, "HTML 表头应包含 纯防御净值"
+        assert "等权净值" in html, "HTML 表头应包含 等权净值"
+        assert "60/40净值" in html, "HTML 表头应包含 60/40净值"
         assert "现金" in html, "HTML 表头应包含 现金"
         assert "明日调仓" in html, "HTML 表头应包含 明日调仓"
         assert "Δ%" in html, "HTML 表头应包含 Δ%"
@@ -174,3 +177,24 @@ class TestNavChart:
         assert "repo_amount" in html, "tableData JSON 应包含 repo_amount 字段"
         # repo 汇总统计行
         assert "repoStats" in html, "HTML 应包含 repoStats 汇总数据"
+
+    def test_benchmark_lines_equal_weight_and_6040(self, tmp_path):
+        """HTML 含 5 ETF 等权基准线 + 60/40 股债基准线。"""
+        data_dir = str(tmp_path / "data")
+        output_path = str(tmp_path / "nav_2026.html")
+        _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
+        mock_update = MagicMock()
+
+        from scripts.nav_chart import main
+        with patch("scripts.nav_chart.update_single_etf", mock_update):
+            main(data_dir=data_dir, output_path=output_path)
+
+        html = open(output_path, encoding="utf-8").read()
+        # 等权基准 dataset
+        assert "5 ETF 等权" in html, "HTML 应包含 5 ETF 等权 dataset"
+        # 60/40 基准 dataset
+        assert "60/40 股债" in html, "HTML 应包含 60/40 股债 dataset"
+        # 等权净值列
+        assert "等权净值" in html, "HTML 表格应包含 等权净值 列"
+        # 60/40 净值列
+        assert "60/40净值" in html, "HTML 表格应包含 60/40净值 列"

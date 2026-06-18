@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：新增等权基准 + 60/40 基准线（图表 + 表格列）
 # [2026-06-18] 修改：新增逆回购可视化（背景带 + 净值虚线 + 表格统计行）
 # [2026-06-16] 修改：去 A/B 参考线，只保留 50/50 生产策略 + 5 ETF 基准
 # [2026-06-16] 修复：移除手动 50/50 平均逻辑，主策略直接取 B（生产 50/50，避免二次平均成 75/25）
@@ -40,6 +41,8 @@ COLORS = {
     "黄金": "#bf9000",
     "国债ETF": "#674ea7",
     "逆回购净值": "#999999",
+    "5 ETF 等权": "#888888",
+    "60/40 股债": "#8B4513",
 }
 
 
@@ -97,6 +100,66 @@ def compute_etf_navs(
     return navs
 
 
+def compute_equal_weight_nav(
+    prices: dict[str, pd.DataFrame], start_date: str
+) -> pd.Series:
+    """5 ETF 等权买入持有（1/N=20%，无再平衡）。起始净值 1.0。"""
+    common_dates = None
+    etf_returns = {}
+    for name in DEFENSE_NAMES:
+        if name not in prices:
+            continue
+        close = prices[name]["close"]
+        mask = close.index >= pd.Timestamp(start_date)
+        if mask.sum() < 2:
+            continue
+        norm = close[mask] / close[mask].iloc[0]
+        etf_returns[name] = norm
+        if common_dates is None:
+            common_dates = set(norm.index)
+        else:
+            common_dates = common_dates.intersection(set(norm.index))
+    if not etf_returns:
+        raise ValueError("无可用 ETF 数据计算等权基准")
+    common_dates = sorted(common_dates)
+    nav = pd.Series(0.0, index=pd.DatetimeIndex(common_dates), dtype=float)
+    weight = 1.0 / len(etf_returns)
+    for name, ret in etf_returns.items():
+        nav += weight * ret.loc[common_dates]
+    return nav
+
+
+def compute_6040_nav(
+    prices: dict[str, pd.DataFrame], start_date: str
+) -> pd.Series:
+    """60/40 股债月度再平衡（沪深300 60% + 国债ETF 40%）。起始净值 1.0。"""
+    if "沪深300" not in prices or "国债ETF" not in prices:
+        raise ValueError("缺少沪深300 或 国债ETF 数据，无法计算 60/40 基准")
+    stock_close = prices["沪深300"]["close"]
+    bond_close = prices["国债ETF"]["close"]
+    common = stock_close.index.intersection(bond_close.index)
+    common = common[common >= pd.Timestamp(start_date)]
+    if len(common) < 2:
+        raise ValueError(f"60/40 基准：{start_date} 之后共同交易日不足")
+    start_dt = common[0]
+    stock_units = 0.6 / stock_close.loc[start_dt]
+    bond_units = 0.4 / bond_close.loc[start_dt]
+    navs = []
+    dates_list = []
+    current_month = start_dt.month
+    for i, d in enumerate(common):
+        s_val = stock_units * stock_close.loc[d]
+        b_val = bond_units * bond_close.loc[d]
+        nav_val = s_val + b_val
+        navs.append(nav_val)
+        dates_list.append(d)
+        if d.month != current_month:
+            current_month = d.month
+            stock_units = 0.6 * nav_val / stock_close.loc[d]
+            bond_units = 0.4 * nav_val / bond_close.loc[d]
+    return pd.Series(navs, index=pd.DatetimeIndex(dates_list), dtype=float)
+
+
 def _nav_to_json(series: pd.Series) -> list[float]:
     """净值 Series → JSON 可序列化的 float 列表（6 位有效数字）。"""
     return [round(float(v), 6) for v in series.values]
@@ -133,7 +196,7 @@ def _format_action(old_weights, new_weights, etf_names):
     return "，".join(parts)
 
 
-def _build_table_data(records_df, etf_names):
+def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
     """权重 = 今日实际持仓（前日 signal 执行而来），操作 = 明日调仓（当日 signal vs 前日 signal）。
     records_df[0] 为 2025 末锚点（不显示），records_df[1:] 为 2026 数据。"""
     first_nav = float(records_df.iloc[1]["nav"])
@@ -144,6 +207,7 @@ def _build_table_data(records_df, etf_names):
             continue  # anchor row, not displayed
 
         date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
+        date_ts = _idx if isinstance(_idx, pd.Timestamp) else pd.Timestamp(_idx)
 
         # --- 持仓权重 = 今日实际持股（昨日 signal → 今日执行） ---
         signal_row = records_df.iloc[i - 1]
@@ -173,9 +237,15 @@ def _build_table_data(records_df, etf_names):
         prev_nav = float(records_df.iloc[i - 1]["nav"]) / first_nav
         delta_nav = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav != 0 else None
 
+        # --- 基准净值 ---
+        ew_val = round(float(ew_nav.loc[date_ts]) / float(ew_nav.iloc[0]), 4) if ew_nav is not None and date_ts in ew_nav.index else None
+        v6040_val = round(float(nav_6040.loc[date_ts]) / float(nav_6040.iloc[0]), 4) if nav_6040 is not None and date_ts in nav_6040.index else None
+
         rows.append({
             "date": date_str,
             "nav": round(nav, 4),
+            "ew_nav": ew_val,
+            "nav_6040": v6040_val,
             "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
             "cash": round(1.0 - total_weight, 4),
             "repo_amount": round(repo_amount / float(row["nav"]), 4) if float(row["nav"]) != 0 else 0.0,
@@ -200,8 +270,10 @@ def generate_html(
     etf_navs: dict[str, pd.Series],
     records_df: pd.DataFrame,
     output_path: str,
+    ew_nav: pd.Series | None = None,
+    nav_6040: pd.Series | None = None,
 ) -> None:
-    """生成 Chart.js HTML 净值对比图（50/50 策略 + 5 ETF + 盈亏线 + 持仓权重表 + 翻页 + 日期搜索）。"""
+    """生成 Chart.js HTML 净值对比图（50/50 策略 + 等权/60/40 基准 + 5 ETF + 盈亏线 + 持仓权重表 + 翻页 + 日期搜索）。"""
 
     labels = _dates_to_labels(strategy_nav.index)
     label_json = json.dumps(labels, ensure_ascii=False)
@@ -282,6 +354,37 @@ def generate_html(
         "borderDash": [4, 4],
     })
 
+    # 5 ETF 等权基准（灰色虚线）
+    if ew_nav is not None and len(ew_nav) > 0:
+        # 对齐到 strategy_nav 的日期范围
+        ew_aligned = ew_nav.reindex(strategy_nav.index).ffill()
+        datasets.append({
+            "label": "5 ETF 等权",
+            "data": _nav_to_json(ew_aligned),
+            "borderColor": COLORS["5 ETF 等权"],
+            "backgroundColor": COLORS["5 ETF 等权"],
+            "borderWidth": 1.5,
+            "pointRadius": 0,
+            "fill": False,
+            "tension": 0,
+            "borderDash": [6, 3],
+        })
+
+    # 60/40 股债基准（棕色虚线）
+    if nav_6040 is not None and len(nav_6040) > 0:
+        v6040_aligned = nav_6040.reindex(strategy_nav.index).ffill()
+        datasets.append({
+            "label": "60/40 股债",
+            "data": _nav_to_json(v6040_aligned),
+            "borderColor": COLORS["60/40 股债"],
+            "backgroundColor": COLORS["60/40 股债"],
+            "borderWidth": 1.5,
+            "pointRadius": 0,
+            "fill": False,
+            "tension": 0,
+            "borderDash": [8, 4],
+        })
+
     for name in DEFENSE_NAMES:
         if name not in etf_navs:
             continue
@@ -300,7 +403,7 @@ def generate_html(
 
     datasets_json = json.dumps(datasets, ensure_ascii=False)
 
-    table_data = _build_table_data(records_df, DEFENSE_NAMES)
+    table_data = _build_table_data(records_df, DEFENSE_NAMES, ew_nav=ew_nav, nav_6040=nav_6040)
     table_data_json = json.dumps(table_data, ensure_ascii=False)
     total_pages = max(1, (len(table_data) + PAGE_SIZE - 1) // PAGE_SIZE)
 
@@ -366,6 +469,7 @@ def generate_html(
       <tr>
         <th>日期</th>
         <th>纯防御净值</th>
+        <th>等权净值</th><th>60/40净值</th>
         <th>沪深300</th><th>创业板</th><th>纳指</th><th>黄金</th><th>国债ETF</th>
         <th>现金</th><th>明日调仓</th><th>Δ%</th>
       </tr>
@@ -500,6 +604,8 @@ function renderTable() {{
     html += '<tr>';
     html += '<td>' + row.date + '</td>';
     html += '<td>' + row.nav.toFixed(4) + '</td>';
+    html += '<td>' + (row.ew_nav != null ? row.ew_nav.toFixed(4) : '—') + '</td>';
+    html += '<td>' + (row.nav_6040 != null ? row.nav_6040.toFixed(4) : '—') + '</td>';
     for (let j = 0; j < 5; j++) {{
       const w = row.weights[j];
       html += '<td>' + (w > 0 ? (w * 100).toFixed(0) + '%' : '—') + '</td>';
@@ -617,6 +723,10 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
         if len(cd) > 0:
             aligned_etf_navs[name] = nav.loc[cd]
 
+    # 基准净值
+    ew_nav = compute_equal_weight_nav(prices, START_DATE)
+    b6040_nav = compute_6040_nav(prices, START_DATE)
+
     # 表格数据：锚点行 + 2026 年数据
     start_dt = pd.Timestamp(START_DATE)
     before = records_df[records_df.index < start_dt]
@@ -625,7 +735,7 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
         records_2026 = pd.concat([anchor, records_df.loc[strategy_nav.index]])
     else:
         records_2026 = records_df.loc[strategy_nav.index]
-    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path)
+    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path, ew_nav=ew_nav, nav_6040=b6040_nav)
     print(f"净值对比图已生成：{output_path}")
 
 
