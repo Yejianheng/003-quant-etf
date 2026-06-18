@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：参数化 defense_names/stock_basket_names/bond_name/repo_rate，支持跨市场验证 @claude-override-approved
 # [2026-06-18] 修改：target_vol_beta 0.15→0.18, vol_tolerance 0.0225→0.027（T+1 重扫，边际换率 1.50 为约束下最优）@claude-override-approved
 # [2026-06-18] 修改：target_vol_beta 0.10→0.15, vol_tolerance 0.015→0.0225（参数扫描确认最优，年化13.1% 回撤-13.1%）@claude-override-approved
 # [2026-06-18] 修改：target_vol_beta 0.08→0.10, vol_tolerance 0.012→0.015（v190 提升年化收益）@claude-override-approved
@@ -42,6 +43,10 @@ DEFAULT_PARAMS = {
     "covariance_method": "ewma",
     "drawdown_thresholds": None,
     "defense_ratio": 1.00,
+    "defense_names": ["沪深300", "创业板", "纳指", "黄金", "国债ETF"],
+    "stock_basket_names": ["沪深300", "创业板", "纳指"],
+    "bond_name": "国债ETF",
+    "repo_rate": 0.02,
 }
 
 
@@ -57,18 +62,19 @@ def generate_signal(
     close = {name: df["close"] for name, df in prices.items()}
 
     # 2. 防御层趋势强度
+    defense_names = p.get("defense_names", DEFENSE_NAMES)
     trend_strengths = {}
-    for name in DEFENSE_NAMES:
+    for name in defense_names:
         if name in close:
             trend_strengths[name] = trend_strength(close[name], window=p["trend_window"])
     if p.get("trend_filter_enabled", True):
         method = p.get("trend_confirmation_method", "trend_strength")
         active = [
-            name for name in DEFENSE_NAMES
+            name for name in defense_names
             if name in close and trend_confirmation(close[name], method=method, window=p["trend_window"])
         ]
     else:
-        active = [name for name in DEFENSE_NAMES if name in close]
+        active = [name for name in defense_names if name in close]
 
     # 3. 防御层目标波动率（等权参考权重）
     predicted_vol = 0.0
@@ -88,7 +94,7 @@ def generate_signal(
         defense_target_weights = {}
 
     # 4. 进攻层时间序列动量（price > MA → 通过，等权分配）
-    offense_names = [name for name in close if name not in DEFENSE_NAMES]
+    offense_names = [name for name in close if name not in defense_names]
     offense_weights = {}
     rankings = []
     if offense_names:
@@ -120,8 +126,8 @@ def generate_signal(
             offense_weights = {name: w * sf_alpha for name, w in offense_weights.items()}
 
     # 5. 相关性熔断
-    stock_basket = {name: close[name] for name in ["沪深300", "创业板", "纳指"] if name in close}
-    bond_close = close.get("国债ETF")
+    stock_basket = {name: close[name] for name in p.get("stock_basket_names", ["沪深300", "创业板", "纳指"]) if name in close}
+    bond_close = close.get(p.get("bond_name", "国债ETF"))
 
     if stock_basket and bond_close is not None:
         cb = correlation_circuit_breaker(
