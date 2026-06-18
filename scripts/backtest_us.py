@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：fetch_us_data 三级 fallback（东财→新浪→Stooq）+ FRED 金价条件修复
 # [2026-06-18] 修改：fetch_us_data 重写 — AKShare(东方财富) + FRED 债券合成
 # [2026-06-18] 新增：美股版策略等效回测 — 跨市场验证
 """
@@ -96,16 +97,36 @@ def _fetch_fred_bond(start, end):
     return result
 
 
+def _fetch_stooq(ticker, start, end):
+    """Stooq 数据源（pandas_datareader），免费无 key，美股 ETF 历史可到 1990s。
+    返回: DataFrame[open, high, low, close, volume] 或 None。
+    """
+    try:
+        df = web.DataReader(f"{ticker}.US", "stooq", start=start, end=end)
+        if df is None or len(df) == 0:
+            return None
+        df = df.rename(columns={
+            "Open": "open", "High": "high", "Low": "low",
+            "Close": "close", "Volume": "volume",
+        })
+        df.index.name = "date"
+        df = df.sort_index()
+        # Stooq 返回降序，转为升序
+        return df
+    except Exception:
+        return None
+
+
 def _fetch_akshare_etf(ticker, start, end):
-    """从 AKShare 新浪后端拉单只美股 ETF 日线。
-    东方财富 ak.stock_us_hist 优先，失败回退新浪 ak.stock_us_daily。
+    """拉取美股 ETF 日线。
+    优先级: 东方财富 → 新浪 → Stooq（pandas_datareader）
     """
     import akshare as ak
     import time
 
     df = None
 
-    # 尝试东方财富（数据更早：SPY 1993 vs 新浪 2001）
+    # 1. 东方财富（数据最早：SPY 1993, QQQ 1999, GLD 2004）
     for attempt in range(2):
         try:
             df = ak.stock_us_hist(
@@ -115,7 +136,6 @@ def _fetch_akshare_etf(ticker, start, end):
                 adjust="qfq",
             )
             if df is not None and len(df) > 0:
-                # 列名归一化（东方财富返回中文列名）
                 df = df.rename(columns={
                     "日期": "date", "开盘": "open", "最高": "high",
                     "最低": "low", "收盘": "close", "成交量": "volume",
@@ -127,9 +147,8 @@ def _fetch_akshare_etf(ticker, start, end):
             else:
                 df = None
 
-    # 东方财富失败 → 回退新浪
+    # 2. 东方财富失败 → 新浪
     if df is None or len(df) == 0:
-        print(f"    [{ticker}] 东方财富不可用，回退新浪")
         for attempt in range(3):
             try:
                 df = ak.stock_us_daily(symbol=ticker, adjust="qfq")
@@ -139,21 +158,38 @@ def _fetch_akshare_etf(ticker, start, end):
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                 else:
-                    raise RuntimeError(f"{ticker} 拉取失败: {e}")
+                    df = None
 
-    # 统一处理：确保 index 为 DatetimeIndex
-    if not isinstance(df.index, pd.DatetimeIndex):
+    # 3. 新浪数据起始检查 → Stooq 补齐更早数据
+    if df is not None and len(df) > 0:
+        # 统一 index
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.set_index("date")
-    if "date" in df.columns:
-        df = df.drop(columns=["date"])
+            df = df.drop(columns=["date"])
+        data_start = df.index.min()
+        desired_start = pd.Timestamp(start)
+        if data_start > desired_start + pd.DateOffset(years=1):
+            print(f"    [{ticker}] 新浪起始 {data_start.date()}，尝试 Stooq 补齐更早数据")
+            df_stooq = _fetch_stooq(ticker, start, str(data_start.date()))
+            if df_stooq is not None and len(df_stooq) > 0:
+                # 拼接: Stooq(早期) + Sina(近期)
+                df = pd.concat([df_stooq, df]).sort_index()
+    elif df is None or len(df) == 0:
+        # 新浪完全失败 → Stooq 独自撑
+        print(f"    [{ticker}] 新浪不可用，回退 Stooq")
+        df = _fetch_stooq(ticker, start, end)
 
+    if df is None or len(df) == 0:
+        raise RuntimeError(f"{ticker} 所有数据源均失败")
+
+    # 列标准化 + 截断 + 清洗
     cols = ["open", "high", "low", "close", "volume"]
     available = [c for c in cols if c in df.columns]
     df = df[available].sort_index()
 
-    # 按日期范围截断
     mask = (df.index >= start) & (df.index <= end)
     df = df.loc[mask]
 
@@ -211,10 +247,11 @@ def fetch_us_data(tickers, start="1996-01-01", end="2026-06-18"):
         except Exception as e:
             print(f"  [{ticker}] AKShare 失败: {e}")
 
-    # 2. GLD 2004 年前缺口 → FRED 金价填充
+    # 2. GLD 数据起始晚于请求起始 → FRED 金价填充缺口
     if "GLD" in result:
         gld_start = result["GLD"].index[0]
-        if gld_start > pd.Timestamp("2004-12-01"):
+        requested_start = pd.Timestamp(start)
+        if gld_start > requested_start:
             try:
                 gold_fred = _fetch_gold_fred(start, str(gld_start.date()))
                 # 拼接: FRED 金价 + GLD ETF
