@@ -32,11 +32,7 @@ def main():
     for name, code in ETF_CODES.items():
         path = os.path.join(DATA_DIR, f"{code}.parquet")
         if os.path.exists(path):
-            df = pd.read_parquet(path)
-            if "close" in df.columns:
-                prices[name] = df["close"]
-            else:
-                prices[name] = df
+            prices[name] = pd.read_parquet(path)
         else:
             print(f"  ⚠ {name}({code}) 数据缺失: {path}")
 
@@ -57,7 +53,7 @@ def main():
     factor_returns = {}
     for name in ETF_CODES:
         if name in prices:
-            close = prices[name]
+            close = prices[name]["close"]
             ret = close.pct_change().dropna()
             factor_returns[name] = ret
 
@@ -100,7 +96,7 @@ def main():
 
 def _print_summary(fa, td, tr, sm):
     print("\n四张表摘要:")
-    print(f"  因子归因: R²={_s(fa.get('r_squared'))}  α={_s(fa.get('alpha'))}")
+    print(f"  因子归因: R2={_s(fa.get('r_squared'))}  alpha={_s(fa.get('alpha'))}")
     print(f"  择时分解: 择时系数={_s(td.get('timing_coefficient'))}  月胜率={_s(td.get('monthly_win_rate'))}")
     print(f"  尾部审计: 偏度={_s(tr.get('skewness'))}  卖保险={'是' if tr.get('insurance_sell_warning') else '否'}")
     rs = sm.get("rolling_sharpe", {})
