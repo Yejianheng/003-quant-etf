@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：test_fetch_us_data — mock AKShare(东方财富) + FRED 双数据源
 # [2026-06-18] 新增：美股回测测试 — 数据获取/日期对齐/久期对比/对照表/2008 压力测试
 
 import numpy as np
@@ -60,38 +61,40 @@ def _make_cn_prices(n=200, seed=42):
 # --- 测试：数据获取 ---
 
 class TestFetchUSData:
-    """数据获取 — yfinance → {ticker: DataFrame}"""
+    """数据获取 — AKShare(东方财富) + FRED → {ticker: DataFrame}"""
 
     def test_fetch_us_data_returns_dict(self, monkeypatch):
-        """mock ak.stock_us_daily → 返回 {ticker: DataFrame} 格式"""
+        """mock ak.stock_us_hist + FRED → 返回所有 ticker"""
         dates = pd.date_range("2024-01-01", "2024-06-01", freq="B")
         n = len(dates)
         rng = np.random.RandomState(42)
-        tickers = ["SPY", "QQQ", "GLD", "SHY", "BIL"]
 
-        def mock_stock_us_daily(symbol, adjust=""):
+        def mock_stock_us_hist(symbol, period, start_date, end_date, adjust):
             price = 100 * np.exp(np.cumsum(rng.normal(0.0005, 0.01, n)))
-            df = pd.DataFrame({
-                "date": pd.to_datetime(dates.date),
-                "open": price * 0.99,
-                "high": price * 1.02,
-                "low": price * 0.98,
-                "close": price,
-                "volume": np.full(n, 1e6),
+            return pd.DataFrame({
+                "日期": dates, "开盘": price*0.99, "最高": price*1.02,
+                "最低": price*0.98, "收盘": price, "成交量": np.full(n, 1e6),
             })
-            # AKShare 返回：index=DatetimeIndex, 含 date 列
-            df.index = pd.to_datetime(df["date"])
-            return df
+
+        def mock_fred_datareader(series, source, start, end):
+            return pd.DataFrame({
+                "DGS2":  np.full(len(dates), 4.0),
+                "DGS10": np.full(len(dates), 4.5),
+                "DGS30": np.full(len(dates), 5.0),
+                "TB3MS": np.full(len(dates), 3.5),
+            }, index=dates)
 
         import akshare as ak
-        monkeypatch.setattr(ak, "stock_us_daily", mock_stock_us_daily)
+        monkeypatch.setattr(ak, "stock_us_hist", mock_stock_us_hist)
+        import pandas_datareader.data as web
+        monkeypatch.setattr(web, "DataReader", mock_fred_datareader)
 
         from scripts.backtest_us import fetch_us_data
-        result = fetch_us_data(tickers, start="2024-01-01", end="2024-06-01")
-        assert isinstance(result, dict)
-        for t in tickers:
-            assert t in result, f"返回 dict 应包含 {t}"
-            assert isinstance(result[t], pd.DataFrame), f"{t} 应为 DataFrame"
+        result = fetch_us_data(["SPY", "QQQ", "GLD", "SHY", "BIL"],
+                               start="2024-01-01", end="2024-06-01")
+        for t in ["SPY", "QQQ", "GLD", "SHY", "BIL"]:
+            assert t in result
+            assert isinstance(result[t], pd.DataFrame)
 
 
 # --- 测试：日期对齐 ---
