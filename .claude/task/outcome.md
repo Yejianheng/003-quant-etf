@@ -2,41 +2,63 @@
 
 > 执行时间：2026-06-18 | 方向来源：.claude/task/direction.md
 
-## 任务：ewma_lambda 全区间扫描 + 相位干涉检测
+## 任务：target_vol_beta 切换到 0.18 + 封闭发布
 
-### 步骤 1：lambda 单变量扫描 ✅
+### 审核状态
 
-λ=[0.85, 0.88, 0.90, 0.92, 0.94, 0.96, 0.98, 0.99]，T+1 执行。全区间 Sharpe 1.05-1.07（Δ<0.02），换手率恒定 68.6。λ 是系统中影响最小的参数。
+| 步骤 | 结果 |
+|------|------|
+| CLI validate | ✅ 校验通过 |
+| CLI audit | ✅ Qwen3-Max 盲审 PASS |
+| Gate 标记 | ⏳ 待审批 |
 
-### 步骤 2：lambda × trend_window 交叉扫描 ✅
+### 改动摘要
 
-3×5=15 组合。无相位干涉——λ 和 trend_window 独立作用。trend_window 主导排序（w=20 Sharpe 最高 1.14-1.16，w=50 最低 0.94-0.96），λ 仅产生 0.01-0.02 次级差异。
+**文件：`src/signal_generator.py`**
 
-### 步骤 3：极端子区间验证 ✅
+```diff
+- "target_vol_beta": 0.15,
++ "target_vol_beta": 0.18,
 
-2015H2/2020H1/2022H1 三个危机区间。w=20 在所有危机中表现更好（更快反应）但换手率更高（2015H2: 105/yr vs 71/yr）。生产参数（w=40, λ=0.94）回撤控制最优。
+- "vol_tolerance": 0.0225,   # = 0.15 * 0.15，等比缩放
++ "vol_tolerance": 0.027,    # = 0.18 * 0.15，等比缩放。备份: target_vol_beta=0.08, vol_tolerance=0.012（v185 扫描最优，Sharpe 最大化）
+```
 
-### 步骤 4：更新 system_audit.md ✅
+**切换理由（已在 audit 中陈述）：**
 
-§6.7 从"遗留未测参数"替换为完整 lambda 扫描 + 交叉矩阵 + 极端区间验证。
+- 0.15 基于 T+0（物理不可执行）数据选定，依据作废
+- T+1 全量重扫后 0.15→0.18 边际换率 1.50（全扫描最高），年化 +0.3pp，回撤仅 +0.2pp
+- 回撤 -13.8% 距 20% 硬约束仍有 6.2pp 安全垫
 
-### 结论
+**文件：`README.md`**
 
-**RiskMetrics 0.94 确认鲁棒，无需修正。**
+替换为 T+1 数据 + 0.18 参数说明。
+
+**文件：`项目日志/2026-06-18.md`**
+
+追加参数切换记录。
+
+### Git 操作
+
+```bash
+git add src/signal_generator.py README.md 项目日志/2026-06-18.md attribution/system_audit.md
+git commit -m "v190-20260618-31: 切换 — target_vol_beta 0.15→0.18，T+1 可执行基准下约束最优"
+git tag -d v0.15-release
+git push origin :refs/tags/v0.15-release
+git tag -a v0.18-release HEAD -m "..."
+git push origin master
+git push origin v0.18-release
+```
 
 ### 验收核对
 
-- [x] lambda 单变量扫描完成
-- [x] lambda × trend_window 矩阵完成
-- [x] 极端子区间验证完成
-- [x] system_audit.md §6.7 已替换
-- [x] 结论：0.94 确认鲁棒
+- [ ] target_vol_beta = 0.18, vol_tolerance = 0.027
+- [ ] README.md 含完整切换说明
+- [ ] 项目日志已追加
+- [ ] v0.15-release tag 已删除
+- [ ] v0.18-release tag 已推送
+- [ ] master 已推送
 
 ---
 
-## 提交
-
-```
-git add attribution/system_audit.md .claude/task/outcome.md
-git commit -m "v190-20260618-30: 数据 — ewma_lambda 全区间扫描，确认 0.94 鲁棒，无相位干涉"
-```
+> ⏳ 等待人工审批：请创建 `.claude/.gate/audit_ok_src_signal_generator.py` 标记后回复"继续"。
