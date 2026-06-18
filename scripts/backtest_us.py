@@ -37,41 +37,75 @@ US_TICKERS = ["SPY", "QQQ", "GLD", "SHY", "IEF", "TLT", "BIL"]
 
 
 def fetch_us_data(tickers, start="2005-01-01", end="2026-06-18"):
-    """拉取美股 ETF 历史数据（yfinance）。
+    """拉取美股 ETF 历史数据（AKShare → 新浪财经美股）。
 
     tickers: ETF 代码列表。
-    start/end: 日期范围。
-    返回: {ticker: DataFrame[open, high, low, close, volume]}。
+    start/end: 日期范围（YYYY-MM-DD 格式）。
+    返回: {ticker: DataFrame[open, high, low, close, volume]}，index=DatetimeIndex。
     """
-    # yfinance 是可选依赖，运行时按需导入
-    try:
-        import yfinance as yf
-    except ImportError:
-        raise ImportError("yfinance 未安装，请执行 pip install yfinance")
-
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True)
+    import time
+    import akshare as ak
 
     result = {}
-    if isinstance(raw.columns, pd.MultiIndex):
-        for ticker in tickers:
-            if ticker in raw.columns.get_level_values(1):
-                df = raw.xs(ticker, level=1, axis=1).copy()
-                df = df.dropna(how="all")
-                if len(df) > 0:
-                    # 统一列名为小写
-                    df.columns = [c.lower() for c in df.columns]
-                    result[ticker] = df
-    else:
-        # 单 ticker 情况
-        if len(tickers) == 1:
-            df = raw.copy()
-            df = df.dropna(how="all")
-            if len(df) > 0:
-                df.columns = [c.lower() for c in df.columns]
-                result[tickers[0]] = df
+    start_int = start.replace("-", "")
+    end_int = end.replace("-", "")
 
-    # BIL 上市前（2007-05 前）用纯现金代替 — 返回空 DataFrame 标记，
-    # run_us_backtest 中检测并补齐
+    for ticker in tickers:
+        for attempt in range(3):
+            try:
+                df = ak.stock_us_daily(symbol=ticker, adjust="qfq")
+                if df is not None and len(df) > 0:
+                    break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                else:
+                    print(f"  [{ticker}] 拉取失败: {e}")
+                    df = None
+
+        if df is None or len(df) == 0:
+            continue
+
+        # 统一处理：确保 index 为 DatetimeIndex
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+        # 删除可能的 date 列（AKShare 有时保留）
+        if "date" in df.columns:
+            df = df.drop(columns=["date"])
+
+        # 列名归一化
+        df = df.rename(columns={
+            "open": "open", "high": "high", "low": "low",
+            "close": "close", "volume": "volume",
+        })
+        cols = ["open", "high", "low", "close", "volume"]
+        available = [c for c in cols if c in df.columns]
+        df = df[available].sort_index()
+
+        # 按日期范围截断
+        mask = (df.index >= start) & (df.index <= end)
+        df = df.loc[mask]
+
+        if len(df) > 0:
+            result[ticker] = df
+            print(f"  [{ticker}] {df.index[0].date()} ~ {df.index[-1].date()} ({len(df)} 天)")
+
+        # 频率限制：每个 ticker 间隔 2 秒
+        time.sleep(2)
+
+    # BIL 补齐：如果没有 BIL 数据，用 SPY 日期 index 生成年化 4% 合成现金曲线
+    if "BIL" not in result and "SPY" in result:
+        spy_idx = result["SPY"].index
+        bil_close = 100 * np.exp(np.cumsum(np.full(len(spy_idx), 0.04 / 252)))
+        result["BIL"] = pd.DataFrame({
+            "open": bil_close, "high": bil_close,
+            "low": bil_close, "close": bil_close,
+            "volume": np.zeros(len(spy_idx)),
+        }, index=spy_idx)
+        print(f"  [BIL] 合成现金曲线 ({len(spy_idx)} 天, 年化 4%)")
+
     return result
 
 

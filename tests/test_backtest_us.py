@@ -63,27 +63,28 @@ class TestFetchUSData:
     """数据获取 — yfinance → {ticker: DataFrame}"""
 
     def test_fetch_us_data_returns_dict(self, monkeypatch):
-        """mock yfinance.download → 返回 {ticker: DataFrame} 格式"""
-        # 构造 mock download 返回值（MultiIndex columns）
+        """mock ak.stock_us_daily → 返回 {ticker: DataFrame} 格式"""
         dates = pd.date_range("2024-01-01", "2024-06-01", freq="B")
         n = len(dates)
         rng = np.random.RandomState(42)
         tickers = ["SPY", "QQQ", "GLD", "SHY", "BIL"]
-        # yfinance MultiIndex 格式: (metric, ticker)
-        arrays = {}
-        for t in tickers:
+
+        def mock_stock_us_daily(symbol, adjust=""):
             price = 100 * np.exp(np.cumsum(rng.normal(0.0005, 0.01, n)))
-            arrays[("Open", t)] = price * 0.99
-            arrays[("High", t)] = price * 1.02
-            arrays[("Low", t)] = price * 0.98
-            arrays[("Close", t)] = price
-            arrays[("Volume", t)] = np.full(n, 1e6)
+            df = pd.DataFrame({
+                "date": pd.to_datetime(dates.date),
+                "open": price * 0.99,
+                "high": price * 1.02,
+                "low": price * 0.98,
+                "close": price,
+                "volume": np.full(n, 1e6),
+            })
+            # AKShare 返回：index=DatetimeIndex, 含 date 列
+            df.index = pd.to_datetime(df["date"])
+            return df
 
-        mock_df = pd.DataFrame(arrays, index=dates)
-        mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
-
-        import yfinance as yf
-        monkeypatch.setattr(yf, "download", lambda *a, **kw: mock_df)
+        import akshare as ak
+        monkeypatch.setattr(ak, "stock_us_daily", mock_stock_us_daily)
 
         from scripts.backtest_us import fetch_us_data
         result = fetch_us_data(tickers, start="2024-01-01", end="2024-06-01")
