@@ -2,71 +2,59 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务：基准完善 + 成本细化 + 图表更新
+## 任务：提升年化收益 — target_vol_beta 0.08→0.10
 
-### 步骤 0（强制）：重跑图表 + 更新数据
+### 背景
 
-上轮 outcome 声称逆回购可视化代码已改但**图表未重新生成**。本轮先补上：
+v185 将 `target_vol_beta` 从 0.10 降到 0.08，年化从 14%→9%。v186 50/50 组合挽回一部分到 10.47%。当前实际年化 8.63%，回撤 -7.71%，远在 20% 硬约束内。用户明确可以接受更多回撤换更高收益。
+
+### 步骤 1：target_vol_beta 0.08 → 0.10
+
+修改 `src/signal_generator.py`，`DEFAULT_PARAMS`：
+```
+"target_vol_beta": 0.10,
+"vol_tolerance": 0.015,
+```
+
+`vol_tolerance` 同步恢复为 `0.015`（= beta×15%，等比缩放）。
+
+### 步骤 2：重跑验证
 
 ```bash
+python scripts/four_tables.py
 python scripts/nav_chart.py
 ```
 
-确认 `nav_2026.html` 时间戳更新，内容含 repo 背景带 + repo 净值虚线（检查 `<script>` 中 datasets 是否有 `逆回购` 标签）。
+对比修复前后：
 
-### 步骤 1：nav_chart.py — 增加等权基准 + 60/40 基准线
+| 指标 | 修复前 (0.08) | 修复后 (0.10) |
+|------|------|------|
+| 年化 | 8.6% | ? |
+| 回撤 | -7.7% | ? |
+| Sharpe | 1.35 | ? |
 
-修改 `scripts/nav_chart.py`：
+### 步骤 3（条件）：如果年化仍 < 10%
 
-1. 图表新增两条基准线：
-   - **5 ETF 等权**（各 20%），灰色虚线
-   - **60/40 股债**（沪深300 60% + 国债ETF 40%，月度再平衡），棕色虚线
-2. 表格新增两列：等权净值、60/40 净值
-3. 重跑 `python scripts/nav_chart.py`
+修改 `src/signal_generator.py`，50/50 → 70/30：
+```
+final_multiplier = 0.7 * dd_mult + 0.3 * min(sf, dd_mult)
+```
 
-### 步骤 2：slippage_scan.py — per-ETF 价差替换统一滑点
-
-修改 `scripts/slippage_scan.py`：
-
-1. 从 data/*.parquet 的 volume 列估算每只 ETF 的日均成交额
-2. 按流动性分三档设定价差：
-   - 高流动性（沪深300 510300 日均 >10 亿）：3bp
-   - 中流动性（创业板 159915、纳指 513100、黄金 518880）：8bp
-   - 低流动性（国债ETF 511010 日均 <2 亿）：15bp
-3. 买卖时使用对应 ETF 的价差替代统一滑点参数
-4. 保留佣金模型不变（万2.5）
-5. 重跑四档（理想/乐观/中性/悲观），输出更新后的 `slippage_scan_results.csv`
-
-### 步骤 3：nav_chart.py — 表格增加换手统计行
-
-表格底部汇总行增加：
-- 年化换手率（全年总换手额 / 平均持仓额）
-- 累计交易成本（佣金 + 滑点，元）
-- 成本占初始资金百分比
-
-### 步骤 4：backtest_engine.py — 全期 60/40 基准输出
-
-修改 `src/backtest_engine.py`，`run_backtest()` 返回值增加：
-- `benchmark_6040`：沪深300 60% + 国债ETF 40%，月度再平衡的净值序列
-
-计算方式：复用 `src/benchmark.py` 的 `compute_benchmark()` 函数，传入对应权重。
+重跑验证。
 
 ### 验收
 
-- [ ] `nav_2026.html` 图表含等权、60/40 两条新基准线 + repo 背景带
-- [ ] 表格含等权净值、60/40 净值两列 + 底部换手/成本统计
-- [ ] `slippage_scan_results.csv` 已按 per-ETF 价差重跑
-- [ ] `run_backtest()` 返回 `benchmark_6040`
+- [ ] target_vol_beta 恢复为 0.10
+- [ ] 年化回升 > 10%（预期 ~12-14%）
+- [ ] 回撤仍在 20% 以内
 - [ ] 全量 pytest 零回归
+- [ ] `nav_2026.html` + `four_tables_report.html` 更新
 
 ### 审核协议
 
-`src/backtest_engine.py` 为保护区文件：
+`src/signal_generator.py` 在保护区 + `protected-contracts.json` 的 `target_vol_beta` 为受保护值。需走内容级保护流程：
+
 1. 先跑 CLI validate
 2. 再跑 CLI audit
 3. 写 outcome → 等人批 → gate → 令牌 Edit
-
-### 已知限制（本轮不处理）
-
-- 2008 压力测试：5 只 ETF 最早数据为 2011 年，2008 不存在。需合成数据，另开 direction。
-- 全天候基准：需先定义资产池和权重方案。
+4. 修改后跑 `check_values.py` 确认新值写入
