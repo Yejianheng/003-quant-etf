@@ -1,29 +1,38 @@
 # 执行结果
 
-> 执行者：Claude | 2026-06-18 | 跨市场验证 — FRED 债券合成 + 30 年目标回测
+> 执行者：Claude | 2026-06-18 | 轮次 2 — 修复 FRED 金价回填 + Stooq 尝试 + 拓宽数据源
 
 ## 摘要
 
-FRED 国债收益率合成债券 ETF + AKShare（新浪）美股数据，实现 21 年（2005-2026）全资产对齐回测。策略 Sharpe **0.86**，最大回撤 **-17.02%**（硬约束 20% 内），TLT（20Y+ 长债）为最优久期。**策略逻辑跨市场成立。**
+两轮执行完成美股跨市场回测。最终策略 Sharpe **0.86**，最大回撤 **-17.02%**（硬约束 20% 内），TLT（20Y+ 长债）为最优久期。**策略逻辑跨市场成立。**
 
-## 完成步骤
+## 本轮新增（vs 上轮）
+
+### 步骤 1：FRED 金价回填条件修复 ✅
+- Bug：`gld_start > pd.Timestamp("2004-12-01")` → `gld_start > requested_start`
+- 条件逻辑已修正，但 FRED 序列 `GOLDAMGBD228NLBR` 已不存在，回填无法生效
+- 测试了 `GOLDPMGBD228NLBR`、`WTGOLD`、`GOLDPM` 等均失败
+- **当前状态**：代码正确，等 FRED 金价序列恢复或切换到其他金价数据源
+
+### 步骤 2：Stooq 三级 fallback ✅
+- 新增 `_fetch_stooq` + 修改 `_fetch_akshare_etf` → 东方财富 → 新浪 → Stooq
+- 实测 **Stooq 不支持美股 ETF**（SPY.US、QQQ 等全部 `RemoteDataError`）
+- 代码框架已就位，Stooq 可用于其他市场（欧洲/波兰）
+
+### 步骤 3：回测验证 ✅
+- 回测结果与上轮一致（无新数据源加入）
+- FRED NASDAQ100（1993+）可用但未集成：需单独构建合成股票 OHLCV，非本轮范围
+
+## 历史步骤（上轮完成）
 
 ### 步骤 7a：基建 ✅
-
-- 安装 `pandas_datareader`，追加至 `requirements.txt`
-- FRED 数据通过 `pandas_datareader.data.DataReader` 免费拉取
+- `pandas_datareader` + `requirements.txt`
 
 ### 步骤 7b：fetch_us_data 重写 ✅
-
-- AKShare `stock_us_hist`（东方财富）优先 → `stock_us_daily`（新浪）fallback（东方财富 `push2his.eastmoney.com` 被网络层拦截）
-- FRED 国债收益率 → 久期合成 SHY/IEF/TLT/BIL
-- FRED GLDAMGBD228NLBR 伦敦金价 → GLD 2004 年前补丁（未触发：新浪 GLD 起始 2004-11-18）
-- 三重数据清洗：diff() 首日 NaN 填充 + 异常日过滤 + 绝对价格底线
+- AKShare 东方财富 → 新浪 fallback + FRED 债券合成 + 三重数据清洗
 
 ### 步骤 7c：测试 ✅
-
-- mock 同步切换至 `ak.stock_us_hist` + `web.DataReader` 双数据源
-- 6/6 全绿，零回归
+- 6/6 全绿
 
 ### 步骤 7d：真实数据回测 ✅
 
@@ -39,7 +48,7 @@ FRED 国债收益率合成债券 ETF + AKShare（新浪）美股数据，实现 
 | TLT | 2001-01-02 | 2026-06-16 | 6,060 | FRED DGS30 合成 |
 | BIL | 2001-01-02 | 2026-06-16 | 6,060 | FRED TB3MS 合成 |
 
-> 实际回测区间被 GLD（2004-11）+ 120 日预热截断至 2005-05-03 ~ 2026-06-16（~21 年）。偏离方向说明见末尾。
+> 实际回测区间：2005-05-03 ~ 2026-06-16（~21 年）
 
 ---
 
@@ -116,18 +125,30 @@ FRED 国债收益率合成债券 ETF + AKShare（新浪）美股数据，实现 
 ## 偏离方向说明
 
 1. **目标 30 年（1996-2026）→ 实际 21 年（2005-2026）**
-   - 东方财富 API `stock_us_hist` 被网络层拦截（`RemoteDisconnected`），不可用
-   - 新浪 `stock_us_daily` 主力：SPY 起始 2001（非 1993），QQQ 起始 2001（非 1999）
+   - 东方财富 API `stock_us_hist` 被网络层拦截，不可用
+   - 新浪 `stock_us_daily`：SPY 起始 2001（非 1993），QQQ 起始 2001（非 1999）
    - GLD 起始 2004-11 + 120 日预热 → 截断至 2005-05
    
-2. **新浪数据质量问题**
-   - 2002-2003 前复权累积误差（SPY 假跌至 $2-6，SPY 实际 ~$80-90）
-   - 2008-2009 前复权极端异常（SPY 出现负价段，最低 -$5.70）
+2. **FRED 金价回填失败**
+   - `GOLDAMGBD228NLBR` 序列在 FRED 已不存在（代码逻辑已修正，等数据源恢复）
+   - 替代序列 `GOLDPMGBD228NLBR`、`WTGOLD`、`GOLDPM` 均不可用
+
+3. **Stooq 兜底失败**
+   - `pandas_datareader` Stooq reader 不支持美股 ETF（SPY.US/QQQ 返回 404）
+   - 三级 fallback 框架已就位，实际回落至新浪
+
+4. **FRED NASDAQ100 可用但未集成**
+   - NASDAQ100 指数从 1993-01-04 起有日频数据（8,424 条）
+   - 可作为 QQQ 早期代理，但需要构建合成 OHLCV 格式
+   - 未在本次方向中，留给后续轮次
+
+5. **新浪数据质量问题**
+   - 2002-2003 前复权累积误差（SPY 假跌至 $2-6）
+   - 2008-2009 前复权极端异常（SPY 负价段）
    - 修复：三重过滤（`\|ret\| > 50%` 迭代剔除 + 绝对价格底线 $30/$15/$30 + 债券日期对齐股票交易日）
 
-3. **FRED 合成债券局限性**
-   - 久期近似公式不捕捉凸性（convexity），长债（TLT）在极端利率波动时误差较大
-   - DGS30 2016 年前数据不连续 → SHY/IEF/TLT 全部从 2001 起
+6. **FRED 合成债券局限性**
+   - 久期近似公式不捕捉凸性（convexity），TLT 在极端利率波动时误差较大
    - TB3MS 为月频 → BIL 日收益率在月内恒定
 
 ---
@@ -138,6 +159,13 @@ FRED 国债收益率合成债券 ETF + AKShare（新浪）美股数据，实现 
 
 ### 建议
 
-1. **东方财富 API 网络排查**：若恢复可延长至 30 年（SPY 1993 起）
-2. **参数重扫**：0.18 target_vol 对美股未必最优，可 grid search
-3. **进攻层复活**：美股有 11 个行业 ETF（XL* 系列），截面动量可能在美股上成立
+1. **FRED NASDAQ100 集成**（最高优先级，低阻力）
+   - FRED NASDAQ100 指数日频数据从 1993 起已确认可用
+   - 构建合成 OHLCV（`open=close*0.999` 等模式，同债券合成）→ 可作为 QQQ 代理
+   - 预计可延长回测至 1999（QQQ 起始）+ FRED 金价若恢复 → 逼近 30 年
+   
+2. **FRED S&P 500 替代序列**：`SP500` 仅从 2016 起，需寻找更长历史序列（如 `WILL5000PR` 或第三方）
+3. **金价数据源**：FRED 序列失效，可尝试 yfinance `GLD` 或 World Gold Council 免费 API
+4. **东方财富 API 网络排查**：若恢复可直接获得 SPY 1993/QQQ 1999 数据
+5. **参数重扫**：0.18 target_vol 对美股未必最优
+6. **进攻层复活**：美股有 11 个行业 ETF（XL* 系列），截面动量可能在美股上成立
