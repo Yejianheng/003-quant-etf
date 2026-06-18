@@ -1,7 +1,9 @@
+# [2026-06-18] 新增：test_single_day_fetch_when_need_one_day 检测 fence-post bug
 # [2026-05-30] 新增：每日数据更新脚本测试 — 3 场景
 """测试 scripts/update_data.py — 增量更新 ETF parquet"""
 
 import os
+from datetime import date
 from unittest.mock import patch, MagicMock
 
 import numpy as np
@@ -86,3 +88,37 @@ class TestUpdateData:
         # 原文件未被破坏
         result = pd.read_parquet(old_path)
         assert len(result) == 120, f"原文件应保持 120 行，实际 {len(result)}"
+
+    def test_single_day_fetch_when_need_one_day(self, tmp_path):
+        """start_date == end_date 时不应跳过，应发起拉取"""
+        data_dir = str(tmp_path / "data")
+        os.makedirs(data_dir)
+
+        # 旧数据截止 T-1（昨天）
+        dates = pd.date_range("2026-06-10", "2026-06-17", freq="B")
+        old_df = pd.DataFrame({
+            "open": [1.0] * len(dates), "high": [1.0] * len(dates),
+            "low": [1.0] * len(dates), "close": [1.0] * len(dates),
+            "volume": [1e6] * len(dates),
+        }, index=dates)
+        old_path = os.path.join(data_dir, "510300.parquet")
+        old_df.to_parquet(old_path)
+
+        # 模拟 AKShare 返回今天 (T) 这一天
+        new_df = pd.DataFrame({
+            "open": [1.01], "high": [1.01],
+            "low": [1.01], "close": [1.01], "volume": [1e6],
+        }, index=[pd.Timestamp("2026-06-18")])
+        mock_fetch = MagicMock(return_value=new_df)
+
+        from scripts.update_data import update_single_etf
+        # 固定 "today" 为 2026-06-18，old_data last_date=6/17, start=6/18, end=6/18
+        with patch("scripts.update_data.date") as mock_date:
+            mock_date.today.return_value = date(2026, 6, 18)
+            with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
+                updated = update_single_etf("510300", data_dir)
+
+        assert updated is True, "单日增量应触发拉取，不应跳过"
+        mock_fetch.assert_called_once()
+        result = pd.read_parquet(old_path)
+        assert len(result) == len(dates) + 1, "应有 len(dates)+1 行"

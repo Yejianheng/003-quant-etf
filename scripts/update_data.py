@@ -1,3 +1,4 @@
+# [2026-06-18] 修复：单日增量 fence-post bug（>= → >），start==end 时不再错误跳过
 # [2026-06-18] 修改：更新完成后调用 trim_isolated_dates 剔除跨 ETF 不一致日
 # [2026-05-30] 新增：每日数据更新脚本 — 增量拉取 AKShare 数据追加到 parquet
 """
@@ -33,7 +34,7 @@ def update_single_etf(code: str, data_dir: str = "data", lookback_days: int = 10
     start_date = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
     end_date = date.today().strftime("%Y-%m-%d")
 
-    if start_date >= end_date:
+    if start_date > end_date:
         print(f"  [{code}] 已是最新（{last_date}）")
         return False
 
