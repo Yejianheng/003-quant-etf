@@ -67,7 +67,7 @@ def _fetch_fred_bond(start, end):
         dy = yields.diff()           # Δyield (百分点)
         carry = yields / 100 / 252   # 日 carry
         price_ret = -dur * dy / 100  # 久期近似: ΔP/P ≈ -D × Δy
-        daily_ret = price_ret + carry
+        daily_ret = (price_ret + carry).fillna(carry)  # 首日无 Δy，仅 carry
         nav = (1 + daily_ret).cumprod()
         nav = nav * 100 / nav.iloc[0]  # 起始价 100
 
@@ -97,36 +97,82 @@ def _fetch_fred_bond(start, end):
 
 
 def _fetch_akshare_etf(ticker, start, end):
-    """从 AKShare 东方财富后端拉单只美股 ETF 日线。"""
+    """从 AKShare 新浪后端拉单只美股 ETF 日线。
+    东方财富 ak.stock_us_hist 优先，失败回退新浪 ak.stock_us_daily。
+    """
     import akshare as ak
     import time
 
-    for attempt in range(3):
+    df = None
+
+    # 尝试东方财富（数据更早：SPY 1993 vs 新浪 2001）
+    for attempt in range(2):
         try:
             df = ak.stock_us_hist(
-                symbol=ticker,
-                period="daily",
+                symbol=ticker, period="daily",
                 start_date=start.replace("-", ""),
                 end_date=end.replace("-", ""),
                 adjust="qfq",
             )
             if df is not None and len(df) > 0:
+                # 列名归一化（东方财富返回中文列名）
+                df = df.rename(columns={
+                    "日期": "date", "开盘": "open", "最高": "high",
+                    "最低": "low", "收盘": "close", "成交量": "volume",
+                })
                 break
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+        except Exception:
+            if attempt < 1:
+                time.sleep(2)
             else:
-                raise RuntimeError(f"{ticker} 拉取失败: {e}")
+                df = None
 
-    # 列名归一化（东方财富返回中文列名）
-    df = df.rename(columns={
-        "日期": "date", "开盘": "open", "最高": "high",
-        "最低": "low", "收盘": "close", "成交量": "volume",
-    })
-    cols = ["date", "open", "high", "low", "close", "volume"]
-    df = df[[c for c in cols if c in df.columns]]
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date").sort_index()
+    # 东方财富失败 → 回退新浪
+    if df is None or len(df) == 0:
+        print(f"    [{ticker}] 东方财富不可用，回退新浪")
+        for attempt in range(3):
+            try:
+                df = ak.stock_us_daily(symbol=ticker, adjust="qfq")
+                if df is not None and len(df) > 0:
+                    break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                else:
+                    raise RuntimeError(f"{ticker} 拉取失败: {e}")
+
+    # 统一处理：确保 index 为 DatetimeIndex
+    if not isinstance(df.index, pd.DatetimeIndex):
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+    if "date" in df.columns:
+        df = df.drop(columns=["date"])
+
+    cols = ["open", "high", "low", "close", "volume"]
+    available = [c for c in cols if c in df.columns]
+    df = df[available].sort_index()
+
+    # 按日期范围截断
+    mask = (df.index >= start) & (df.index <= end)
+    df = df.loc[mask]
+
+    # 过滤前复权异常负价（新浪美股有 2009 年负价段）
+    if "close" in df.columns:
+        df = df[df["close"] > 0]
+    # 异常日过滤：单日涨跌 > 50% → 剔除（新浪美股 2002-2003/2008-2009 多段异常）
+    for _ in range(3):
+        ret = df["close"].pct_change()
+        bad = (ret.abs() > 0.50)
+        if not bad.any():
+            break
+        df = df[~bad.reindex(df.index, fill_value=False)]
+    # 绝对价格底线：前复权后不应跌破该值（新浪 qfq 累积误差导致 2002-2003 SPY 假跌至 $2-20）
+    price_floors = {"SPY": 30.0, "QQQ": 15.0, "GLD": 30.0}
+    floor = price_floors.get(ticker, 0)
+    if floor > 0 and "close" in df.columns:
+        df = df[df["close"] >= floor]
+
     return df
 
 
@@ -189,6 +235,17 @@ def fetch_us_data(tickers, start="1996-01-01", end="2026-06-18"):
     except Exception as e:
         print(f"  FRED 债券合成失败: {e}")
 
+    # 4. 债券日期对齐：FRED ffill 会填充周末/假日，截断到股票交易日
+    stock_dates = set()
+    for t in ["SPY", "QQQ", "GLD"]:
+        if t in result:
+            stock_dates.update(result[t].index)
+    if stock_dates:
+        for t in ["SHY", "IEF", "TLT", "BIL"]:
+            if t in result:
+                df = result[t]
+                result[t] = df[df.index.isin(stock_dates)]
+
     return result
 
 
@@ -233,8 +290,8 @@ def run_us_backtest(prices, bond_ticker, repo_rate=0.04):
             "6040": {"SPY": 0.60, bond_ticker: 0.40},
         },
     }
-    return run_backtest(prices, params=params, execution_lag=1)
-
+    aligned = align_dates_union(prices)
+    return run_backtest(aligned, params=params, execution_lag=1)
 
 def _compute_metrics_from_result(result):
     """从 run_backtest 结果提取标量绩效指标。"""
