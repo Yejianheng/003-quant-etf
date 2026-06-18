@@ -88,6 +88,10 @@ def fetch_us_data(tickers, start="2005-01-01", end="2026-06-18"):
         mask = (df.index >= start) & (df.index <= end)
         df = df.loc[mask]
 
+        # 过滤前复权异常负价（累积分红修正过度，多见于 2009 年）
+        if "close" in df.columns:
+            df = df[df["close"] > 0]
+
         if len(df) > 0:
             result[ticker] = df
             print(f"  [{ticker}] {df.index[0].date()} ~ {df.index[-1].date()} ({len(df)} 天)")
