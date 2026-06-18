@@ -2,65 +2,67 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务：系统审计文件入必读 + 封存发布
+## 任务：过期文件归档 + 必读内容调整
 
-### 背景
+### 步骤 1：建 archive 目录并移入过期文件
 
-`attribution/system_audit.md` 是策略系统的完整技术文档，覆盖规则、决策链、绩效、仓位轨迹、压力测试、参数敏感度、成本、熔断鲁棒性、宏观经济分解。需设为新窗口必读文件。
+```bash
+mkdir -p archive/设计文档 archive/测试报告 archive/审计记录
 
-### 步骤 1：CLAUDE.md 增加必读引用
+# 设计文档（被 system_audit.md 替代）
+git mv 方向性讨论.md archive/设计文档/
+git mv 进攻层失效分析.md archive/设计文档/
 
-修改 `CLAUDE.md`，在 "AI 核心指令" 段落中添加 `attribution/system_audit.md`：
+# 测试报告（已执行完毕，历史记录）
+git mv 测试报告.md archive/测试报告/
+git mv strateg_漏洞验证_20260612.md archive/测试报告/
+git mv 新增测试方案.txt archive/测试报告/
+
+# 审计记录
+git mv 跨模型审计/全量审计-prompt.md archive/审计记录/
+git mv 跨模型审计/公式验证报告.md archive/审计记录/
+```
+
+删除空目录 `跨模型审计/`。
+
+### 步骤 2：CLAUDE.md 移除方向性讨论引用
 
 ```markdown
-> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、`方向性讨论.md`、`attribution/system_audit.md` 及 `.claude/rules/` 下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。
+> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、
+  `attribution/system_audit.md` 及 `.claude/rules/`
+  下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。
 ```
 
-### 步骤 2：打 release tag
+只保留 `system_audit.md`，去掉 `方向性讨论.md`。
 
-当前 HEAD 为 0.15 生产版本，含完整的四张表/缺口审计/系统审计/熔断扫描/宏观分解。打 tag：
+### 步骤 3：10-context.md 加载分层图同步
 
-```bash
-git tag -a v0.15-release f8abc9e~1..HEAD -m "
-【执行封闭版本】v0.15-release — 2026-06-18
-
-策略配置：
-  target_vol_beta=0.15（约束下收益最优），vol_tolerance=0.0225
-  50/50 A/B 公式，defense_ratio=1.00
-  备份参数: target_vol_beta=0.08（v0.08-canonical tag，Sharpe 最大化）
-
-绩效 (2014-2026, T+1):
-  年化 13.1%, 回撤 -13.1%, Sharpe 1.23
-
-交付物：
-  attribution/system_audit.md — 系统审计（规则/决策链/绩效/仓位轨迹/压力/敏感度/熔断鲁棒性/宏观分解）
-  attribution/gap_audit.md — 缺口审计（7项关闭5项）
-  attribution/ — 四张表收益归因系统（7模块+7测试）
-  scripts/four_tables.py — 全量审计入口
-  scripts/nav_chart.py — 2026净值可视化（等权/60/40/repo/换手/成本）
-  scripts/corr_robustness_scan.py — 熔断三维扫描
-  scripts/macro_corr_decomposition.py — 股债相关性宏观分解
-  项目日志/2026-06-18.md — 全天记录
-
-封存说明：
-  本版本为执行封闭版本。策略逻辑完整，所有核心参数经过扫描验证。
-  后续改动应基于本版本的审计文件（system_audit.md）作为事实源。
-"
+```
+CLAUDE.md（始终加载）
+  └── attribution/system_audit.md（始终加载，系统审计）
+  └── .claude/rules/（始终加载，按编号顺序）
+        ├── 1-architecture.md
+        ├── ...
+        └── 12-project-log.md
+  └── AGENTS.md / DESIGN.md（始终加载）
+  └── archive/（历史文件，AI 在需要时自行读取）
 ```
 
-注意：tag 命令如果范围语法不支持，直接 `git tag -a v0.15-release HEAD -m "..."`。
+### 步骤 4：更新 .claudeignore
 
-### 步骤 3：推送
+确保 `archive/` 不在 ignore 中，让归档文件被 git 追踪。
+
+### 步骤 5：提交
 
 ```bash
-git push origin master
-git push origin v0.15-release
+git add -A
+git commit -m "v190-20260618-23: 归档 — 过期文件移至 archive/，必读简化为 system_audit + rules"
 ```
 
 ### 验收
 
-- [ ] CLAUDE.md 含 `attribution/system_audit.md` 引用
-- [ ] `v0.15-release` tag 存在且已推送
-- [ ] master 已推送
-- [ ] `git tag -l` 可见 `v0.08-canonical` + `v0.15-release` 两个 tag
+- [ ] `archive/` 含三个子目录 + 7 个文件
+- [ ] CLAUDE.md 必读引用仅含 `system_audit.md`
+- [ ] 10-context.md 加载图与 CLAUDE.md 一致
+- [ ] `跨模型审计/` 已删除
 - [ ] 工作区干净

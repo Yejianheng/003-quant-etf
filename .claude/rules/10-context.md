@@ -47,6 +47,7 @@ __pycache__/
 
 ```
 CLAUDE.md（≤40 行，始终加载）
+  └── attribution/system_audit.md（始终加载）
   └── .claude/rules/（始终加载，按编号顺序）
         ├── 1-architecture.md
         ├── 2-coding-style.md
@@ -54,11 +55,12 @@ CLAUDE.md（≤40 行，始终加载）
         └── 12-project-log.md
   └── AGENTS.md / DESIGN.md（始终加载）
   └── docs/architecture/*.md（AI 在需要时自行读取）
+  └── archive/（按需加载，仅当任务明确引用时）
 ```
 
 - 根文件只做导航，不堆内容。
 - 规则文件按关注点拆分，一个文件管一件事。
-- 子目录可放独立 CLAUDE.md（如 `frontend/CLAUDE.md`），AI 在该目录工作时自动加载，避免前端规则污染后端任务。**子目录 CLAUDE.md 第一行必须是 `@../CLAUDE.md`**，确保根目录安全规则（保护区清单、Hook 配置、宪法）始终生效。
+- 子目录可放独立 CLAUDE.md（如 `frontend/CLAUDE.md`），AI 在该目录工作时自动加载，避免前端规则污染后端任务。**子目录 CLAUDE.md 第一行必须是 `@../CLAUDE.md`**，确保根目录安全规则（保护区清单、Hook 配置、宪法）始终生效。@claude-override-approved
 
 ## 验证
 
