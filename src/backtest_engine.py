@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：参数化 repo_rate/defense_names/benchmark_specs，支持跨市场回测 @claude-override-approved
 # [2026-06-18] 修改：新增 slippage_bps_map per-ETF 价差参数 + benchmark_6040 返回值
 # [2026-05-30] 修复：parameter_scan scalar_metrics 排除 _recorder/benchmark_* 序列，避免 CSV 字段超限
 # [2026-05-30] 修复：repo_cash 改为残差计算（现金守恒）+ 首日直接执行避免空仓期 — T+1 现金泄漏
@@ -18,7 +19,7 @@ from src.portfolio_manager import allocate_capital
 from src.recorder import init_recorder, record_daily, get_records_df
 from src.benchmark import compute_benchmark, compute_single_benchmark
 
-REPO_ANNUAL_RATE = 0.02
+REPO_ANNUAL_RATE_DEFAULT = 0.02
 
 
 def union_dates(prices: dict[str, pd.DataFrame], min_etf_count: int | None = None) -> pd.DatetimeIndex:
@@ -87,10 +88,13 @@ def run_backtest(
     """
     # 1. 日期范围：所有标的 index 的并集（动态 ETF 接入）
     dates = union_dates(prices)
+    p = params or {}
+    repo_rate = p.get("repo_rate", REPO_ANNUAL_RATE_DEFAULT)
+    defense_names = p.get("defense_names", DEFENSE_NAMES)
 
     # 1b. 截断到防御 ETF 全部就位之后
     defense_starts = []
-    for name in DEFENSE_NAMES:
+    for name in defense_names:
         if name in prices and len(prices[name]) > 0:
             defense_starts.append(prices[name].index.min())
     if defense_starts:
@@ -120,8 +124,8 @@ def run_backtest(
     for t in range(min_days, len(dates)):
         today = dates[t]
 
-        # repo 现金日利息（年化 2% / 252）
-        repo_cash *= (1.0 + REPO_ANNUAL_RATE / 252.0)
+        # repo 现金日利息（年化 repo_rate / 252）
+        repo_cash *= (1.0 + repo_rate / 252.0)
 
         # 动态 ETF 接入：只传入当日有数据且满足 min_history 的 ETF
         available_names = get_available_etfs(prices, today, min_history=min_days)
@@ -255,23 +259,27 @@ def run_backtest(
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 0 else 0.0
 
     # 5. 基准
-    benchmark_nav = compute_benchmark(prices)
+    benchmark_specs = p.get("benchmark_specs")
+    if benchmark_specs:
+        # 从 benchmark_specs 构建默认 benchmark_nav（等权各 spec）
+        default_weights: dict[str, float] = {}
+        n_specs = len(benchmark_specs)
+        for label, spec in benchmark_specs.items():
+            if spec is None:
+                default_weights[label] = default_weights.get(label, 0) + 1.0 / n_specs
+            elif isinstance(spec, dict):
+                for name, w in spec.items():
+                    default_weights[name] = default_weights.get(name, 0) + w / n_specs
+        benchmark_nav = compute_benchmark(prices, default_weights)
+    else:
+        benchmark_nav = compute_benchmark(prices)
     final_benchmark_nav = float(benchmark_nav.iloc[-1])
     benchmark_return = final_benchmark_nav - 1.0
 
-    benchmark_300 = compute_single_benchmark(prices, "沪深300")
-    benchmark_chinext = compute_single_benchmark(prices, "创业板")
-    benchmark_nasdaq = compute_single_benchmark(prices, "纳指")
-    benchmark_6040 = compute_benchmark(prices, {"沪深300": 0.60, "国债ETF": 0.40})
-
-    return {
+    result = {
         "records_df": records_df,
         "_recorder": recorder,
         "benchmark_nav": benchmark_nav,
-        "benchmark_300": benchmark_300,
-        "benchmark_chinext": benchmark_chinext,
-        "benchmark_nasdaq": benchmark_nasdaq,
-        "benchmark_6040": benchmark_6040,
         "final_nav": final_nav,
         "final_benchmark_nav": final_benchmark_nav,
         "total_return": total_return,
@@ -282,6 +290,21 @@ def run_backtest(
         "max_drawdown": max_drawdown,
         "calmar_ratio": calmar_ratio,
     }
+
+    if benchmark_specs:
+        for label, spec in benchmark_specs.items():
+            key = f"benchmark_{label}"
+            if spec is None:
+                result[key] = compute_single_benchmark(prices, label)
+            elif isinstance(spec, dict):
+                result[key] = compute_benchmark(prices, spec)
+    else:
+        result["benchmark_300"] = compute_single_benchmark(prices, "沪深300")
+        result["benchmark_chinext"] = compute_single_benchmark(prices, "创业板")
+        result["benchmark_nasdaq"] = compute_single_benchmark(prices, "纳指")
+        result["benchmark_6040"] = compute_benchmark(prices, {"沪深300": 0.60, "国债ETF": 0.40})
+
+    return result
 
 
 def parameter_scan(
@@ -330,9 +353,8 @@ def parameter_scan(
         scalar_metrics = {
             k: v
             for k, v in bt.items()
-            if k not in ("records_df", "benchmark_nav", "_recorder",
-                         "benchmark_300", "benchmark_chinext", "benchmark_nasdaq",
-                         "benchmark_6040")
+            if k not in ("records_df", "benchmark_nav", "_recorder")
+            and not k.startswith("benchmark_")
         }
         results.append({**params, **scalar_metrics})
 

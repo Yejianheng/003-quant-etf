@@ -237,7 +237,12 @@ class TestUSDefenseNames:
             "BIL": _make_ohlcv(_price_series(np.full(n, 0.0001))),
         }
         result = run_backtest(prices, initial_capital=1_000_000, min_days=120,
-                              params={"defense_names": ["SPY", "QQQ", "GLD", "SHY", "BIL"]})
+                              params={
+                                  "defense_names": ["SPY", "QQQ", "GLD", "SHY", "BIL"],
+                                  "stock_basket_names": ["SPY", "QQQ"],
+                                  "bond_name": "SHY",
+                                  "benchmark_specs": {"SPY": None, "QQQ": None, "6040": {"SPY": 0.60, "SHY": 0.40}},
+                              })
 
         for key in ["final_nav", "total_return", "annual_return", "sharpe_ratio", "max_drawdown"]:
             assert key in result, f"返回值应包含 {key}"
