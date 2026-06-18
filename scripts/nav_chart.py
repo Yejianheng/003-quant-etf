@@ -160,6 +160,73 @@ def compute_6040_nav(
     return pd.Series(navs, index=pd.DatetimeIndex(dates_list), dtype=float)
 
 
+def _compute_turnover_stats(
+    positions_detail: list[dict], prices: dict[str, pd.DataFrame]
+) -> dict:
+    """从日持仓明细计算换手率与交易成本。
+
+    positions_detail: recorder["positions_detail"]，每条含 date + 各 ETF 持仓市值。
+    prices: ETF OHLCV 数据（用于 per-ETF 价差估算）。
+    返回 turnover_stats dict。
+    """
+    if len(positions_detail) < 2:
+        return {"annual_turnover_rate": 0.0, "total_cost": 0.0, "cost_pct": 0.0}
+
+    # per-ETF 价差（bp）— 与 slippage_scan.py 同逻辑
+    spreads = {}
+    for name, df in prices.items():
+        if "volume" not in df.columns or len(df) < 20:
+            spreads[name] = 15.0
+        else:
+            avg_volume = float(df["volume"].tail(252).mean())
+            avg_close = float(df["close"].tail(252).mean())
+            avg_turnover = avg_volume * avg_close
+            if avg_turnover > 1e9:
+                spreads[name] = 3.0
+            elif avg_turnover > 2e8:
+                spreads[name] = 8.0
+            else:
+                spreads[name] = 15.0
+
+    COMMISSION_RATE = 0.00025  # 万2.5
+
+    etf_names = [k for k in positions_detail[0] if k != "date"]
+    total_turnover = 0.0
+    total_commission = 0.0
+    total_slippage = 0.0
+    total_position_value = 0.0
+    n_days = len(positions_detail)
+
+    for i in range(1, n_days):
+        prev = positions_detail[i - 1]
+        curr = positions_detail[i]
+        daily_position_value = 0.0
+        for name in etf_names:
+            prev_val = float(prev.get(name, 0.0) or 0.0)
+            curr_val = float(curr.get(name, 0.0) or 0.0)
+            turnover = abs(curr_val - prev_val)
+            total_turnover += turnover
+            daily_position_value += curr_val
+            # 成本：佣金 + 滑点
+            if turnover > 0:
+                total_commission += turnover * COMMISSION_RATE
+                total_slippage += turnover * (spreads.get(name, 8.0) / 10000.0)
+        total_position_value += daily_position_value
+
+    avg_position_value = total_position_value / (n_days - 1) if n_days > 1 else 1.0
+    total_cost = total_commission + total_slippage
+
+    return {
+        "total_turnover": round(total_turnover, 2),
+        "avg_position_value": round(avg_position_value, 2),
+        "annual_turnover_rate": round(total_turnover / avg_position_value * 100, 1) if avg_position_value > 0 else 0.0,
+        "total_commission": round(total_commission, 2),
+        "total_slippage": round(total_slippage, 2),
+        "total_cost": round(total_cost, 2),
+        "cost_pct": round(total_cost / avg_position_value * 100, 4) if avg_position_value > 0 else 0.0,
+    }
+
+
 def _nav_to_json(series: pd.Series) -> list[float]:
     """净值 Series → JSON 可序列化的 float 列表（6 位有效数字）。"""
     return [round(float(v), 6) for v in series.values]
@@ -272,6 +339,7 @@ def generate_html(
     output_path: str,
     ew_nav: pd.Series | None = None,
     nav_6040: pd.Series | None = None,
+    turnover_stats: dict | None = None,
 ) -> None:
     """生成 Chart.js HTML 净值对比图（50/50 策略 + 等权/60/40 基准 + 5 ETF + 盈亏线 + 持仓权重表 + 翻页 + 日期搜索）。"""
 
@@ -405,6 +473,7 @@ def generate_html(
 
     table_data = _build_table_data(records_df, DEFENSE_NAMES, ew_nav=ew_nav, nav_6040=nav_6040)
     table_data_json = json.dumps(table_data, ensure_ascii=False)
+    turnover_stats_json = json.dumps(turnover_stats, ensure_ascii=False) if turnover_stats else "null"
     total_pages = max(1, (len(table_data) + PAGE_SIZE - 1) // PAGE_SIZE)
 
     html = f"""<!DOCTYPE html>
@@ -485,6 +554,13 @@ def generate_html(
   </table>
 </div>
 
+<div class="table-wrapper" style="margin-top:16px;">
+  <table id="turnoverStatsTable">
+    <thead><tr><th colspan="2">换手与成本</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
 <div class="pagination">
   <button id="prevBtn" onclick="changePage(-1)">上一页</button>
   <span class="page-info" id="pageInfo">第 1/{total_pages} 页</span>
@@ -508,6 +584,7 @@ const datasets = {datasets_json};
 
 const repoPeriods = {repo_periods_json};
 const repoStats = {repo_stats_json};
+const turnoverStats = {turnover_stats_json};
 
 const breakevenPlugin = {{
   id: 'breakevenLine',
@@ -639,6 +716,15 @@ function renderRepoStats() {{
     '<tr><td>最长连续空仓</td><td>' + repoStats.max_consecutive_repo + ' 天</td></tr>';
 }}
 
+function renderTurnoverStats() {{
+  const tbody = document.querySelector('#turnoverStatsTable tbody');
+  if (!tbody || !turnoverStats) return;
+  tbody.innerHTML =
+    '<tr><td>年化换手率</td><td>' + turnoverStats.annual_turnover_rate.toFixed(1) + '%</td></tr>' +
+    '<tr><td>累计交易成本（佣金+滑点）</td><td>' + turnoverStats.total_cost.toFixed(2) + ' 元</td></tr>' +
+    '<tr><td>成本占比（成本/平均持仓）</td><td>' + turnoverStats.cost_pct.toFixed(4) + '%</td></tr>';
+}}
+
 function changePage(delta) {{
   const newPage = currentPage + delta;
   if (newPage < 1 || newPage > totalPages) return;
@@ -685,6 +771,7 @@ function jumpToDate() {{
 
 renderTable();
 renderRepoStats();
+renderTurnoverStats();
 </script>
 </body>
 </html>"""
@@ -735,7 +822,13 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
         records_2026 = pd.concat([anchor, records_df.loc[strategy_nav.index]])
     else:
         records_2026 = records_df.loc[strategy_nav.index]
-    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path, ew_nav=ew_nav, nav_6040=b6040_nav)
+    # 换手与成本统计
+    positions_detail = result.get("_recorder", {}).get("positions_detail", [])
+    # 截断到 2026 的 positions_detail
+    pd_2026 = [d for d in positions_detail if pd.Timestamp(d["date"]) >= start_dt]
+    turnover_stats = _compute_turnover_stats(pd_2026, prices)
+
+    generate_html(strategy_nav, aligned_etf_navs, records_2026, output_path, ew_nav=ew_nav, nav_6040=b6040_nav, turnover_stats=turnover_stats)
     print(f"净值对比图已生成：{output_path}")
 
 

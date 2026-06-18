@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：适配换手统计行（表格底部新增换手率 + 成本行）
 # [2026-06-18] 修改：适配等权基准 + 60/40 基准线（dataset 7→9, 颜色 +2, 表头 +2 列）
 # [2026-06-18] 新增：repo 可视化元素测试（逆回购净值虚线 + 空仓背景带 + repo 汇总）
 # [2026-06-16] 修改：去 A/B 参考线，颜色断言更新为 1 策略 + 5 ETF（6 色）
@@ -198,3 +199,19 @@ class TestNavChart:
         assert "等权净值" in html, "HTML 表格应包含 等权净值 列"
         # 60/40 净值列
         assert "60/40净值" in html, "HTML 表格应包含 60/40净值 列"
+
+    def test_turnover_stats_in_table(self, tmp_path):
+        """HTML 表格底部含换手统计行（年化换手率 + 累计成本 + 成本占比）。"""
+        data_dir = str(tmp_path / "data")
+        output_path = str(tmp_path / "nav_2026.html")
+        _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
+        mock_update = MagicMock()
+
+        from scripts.nav_chart import main
+        with patch("scripts.nav_chart.update_single_etf", mock_update):
+            main(data_dir=data_dir, output_path=output_path)
+
+        html = open(output_path, encoding="utf-8").read()
+        assert "年化换手率" in html, "HTML 应包含 年化换手率"
+        assert "累计交易成本" in html, "HTML 应包含 累计交易成本"
+        assert "成本占比" in html, "HTML 应包含 成本占比"
