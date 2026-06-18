@@ -1,3 +1,4 @@
+# [2026-06-18] 新增：跨市场参数化测试 — repo_rate / defense_names 参数化
 # [2026-05-28] 新增：test_three_benchmarks — 验证 run_backtest 返回三条新基准
 # [2026-05-27] 新增：回测引擎测试 — 3 场景
 
@@ -200,3 +201,43 @@ class TestThreeBenchmarks:
 
         # 现有 benchmark_nav 不应被删除
         assert "benchmark_nav" in result
+
+
+class TestRepoRateParam:
+    """跨市场参数化 — repo_rate 影响 repo 利息计算"""
+
+    def test_run_backtest_with_repo_rate(self):
+        """repo_rate=0.04 → repo 利息按 4% 计算，高于默认 2%"""
+        prices = _make_bull_prices(n=200)
+        result_04 = run_backtest(prices, initial_capital=1_000_000, min_days=120,
+                                 params={"repo_rate": 0.04})
+        result_02 = run_backtest(prices, initial_capital=1_000_000, min_days=120,
+                                 params={"repo_rate": 0.02})
+        assert result_04["final_nav"] > result_02["final_nav"], (
+            f"repo_rate=0.04 终值应 > 0.02，实际 {result_04['final_nav']:.2f} vs {result_02['final_nav']:.2f}"
+        )
+
+
+class TestUSDefenseNames:
+    """跨市场参数化 — defense_names 传入 US 资产名"""
+
+    def test_run_backtest_with_us_defense_names(self):
+        """传入 defense_names=["SPY","QQQ","GLD","SHY","BIL"] → 不抛异常"""
+        rng = np.random.RandomState(42)
+        n = 200
+        noise = rng.normal(0, 0.001, n)
+        stock_r = np.full(n, 0.001) + noise
+        bond_r = np.full(n, 0.0005) - noise
+
+        prices = {
+            "SPY": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0003, n))),
+            "QQQ": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0003, n))),
+            "GLD": _make_ohlcv(_price_series(rng.normal(0.0003, 0.001, n))),
+            "SHY": _make_ohlcv(_price_series(bond_r)),
+            "BIL": _make_ohlcv(_price_series(np.full(n, 0.0001))),
+        }
+        result = run_backtest(prices, initial_capital=1_000_000, min_days=120,
+                              params={"defense_names": ["SPY", "QQQ", "GLD", "SHY", "BIL"]})
+
+        for key in ["final_nav", "total_return", "annual_return", "sharpe_ratio", "max_drawdown"]:
+            assert key in result, f"返回值应包含 {key}"
