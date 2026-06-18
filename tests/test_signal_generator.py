@@ -291,6 +291,74 @@ class TestOffenseTrendFilter:
             f"等权比例应接近1:1，实际 ratio={ratio:.4f}"
         )
 
+# [2026-06-18] 新增：跨市场参数化测试 — defense_names/stock_basket_names/bond_name
+class TestCrossMarketParams:
+    """跨市场参数化 — US 资产名传入 params，验证正确路由"""
+
+    def test_generate_signal_with_us_params(self):
+        """传入 US defense_names / stock_basket_names / bond_name → 不抛异常，正确路由"""
+        rng = np.random.RandomState(42)
+        n = 120
+        noise = rng.normal(0, 0.001, n)
+        stock_r = np.full(n, 0.001) + noise
+        bond_r = np.full(n, 0.0005) - noise
+        gold_r = rng.normal(0.0005, 0.001, n)
+        bil_r = np.full(n, 0.0001)  # BIL ~ 现金
+
+        prices = {
+            "SPY": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "QQQ": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0003, n))),
+            "GLD": _make_ohlcv(_price_series(gold_r)),
+            "SHY": _make_ohlcv(_price_series(bond_r)),
+            "BIL": _make_ohlcv(_price_series(bil_r)),
+        }
+        pv = _make_rising_portfolio(n)
+        params = {
+            "defense_names": ["SPY", "QQQ", "GLD", "SHY", "BIL"],
+            "stock_basket_names": ["SPY", "QQQ"],
+            "bond_name": "SHY",
+        }
+        signal = generate_signal(prices, pv, params)
+
+        # defense.active 应含全部 5 只 US ETF
+        assert len(signal["defense"]["active"]) == 5, (
+            f"全部上涨时应 5 只全 active，实际 {signal['defense']['active']}"
+        )
+        for name in ["SPY", "QQQ", "GLD", "SHY", "BIL"]:
+            assert name in signal["defense"]["active"], f"{name} 应在 active 中"
+
+        # circuit_breaker 的 stock_basket 只用 SPY/QQQ
+        assert signal["circuit_breaker"]["triggered"] is False, (
+            f"负相关不应触发熔断，smoothed_corr={signal['circuit_breaker']['smoothed_corr']:.4f}"
+        )
+
+    def test_generate_signal_custom_bond_absent(self):
+        """bond_name 指向不存在的 ETF → cb 不触发"""
+        rng = np.random.RandomState(42)
+        n = 120
+        noise = rng.normal(0, 0.001, n)
+        stock_r = np.full(n, 0.001) + noise
+        bond_r = np.full(n, 0.0005) - noise
+
+        prices = {
+            "SPY": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0002, n))),
+            "QQQ": _make_ohlcv(_price_series(stock_r + rng.normal(0, 0.0003, n))),
+            "GLD": _make_ohlcv(_price_series(rng.normal(0.0005, 0.001, n))),
+            "SHY": _make_ohlcv(_price_series(bond_r)),
+            "BIL": _make_ohlcv(_price_series(np.full(n, 0.0001))),
+        }
+        pv = _make_rising_portfolio(n)
+        params = {
+            "defense_names": ["SPY", "QQQ", "GLD", "SHY", "BIL"],
+            "stock_basket_names": ["SPY", "QQQ"],
+            "bond_name": "TLT",  # TLT 不在 prices 中
+        }
+        signal = generate_signal(prices, pv, params)
+
+        assert signal["circuit_breaker"]["triggered"] is False, (
+            "bond_name 不在 prices 中 → cb 不应触发"
+        )
+
     def test_no_top_k_truncation(self):
         """4只进攻ETF均在MA上方 → 新逻辑全部通过（旧 top_k=3 会截断为3只）"""
         rng = np.random.RandomState(55)
