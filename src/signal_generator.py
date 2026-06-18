@@ -1,3 +1,5 @@
+# [2026-06-18] 修改：target_vol_beta 0.10→0.15, vol_tolerance 0.015→0.0225（参数扫描确认最优，年化13.1% 回撤-13.1%）@claude-override-approved
+# [2026-06-18] 修改：target_vol_beta 0.08→0.10, vol_tolerance 0.012→0.015（v190 提升年化收益）@claude-override-approved
 # [2026-06-16] 修改：final_multiplier 落地 50/50 公式（v186 决策未实现，纯B→50/50）@claude-override-approved
 # [2026-06-12] 修改：target_vol_beta 0.10→0.08（v184 扫描最优）
 # [2026-05-30] 修改：defense 返回新增 predicted_vol — Vol Target 触发审计
@@ -24,9 +26,10 @@ DEFAULT_PARAMS = {
     "momentum_short": 20,
     "momentum_long": 60,
     "offense_top_k": 3,
-    "target_vol_beta": 0.08,
+    # 备份: target_vol_beta=0.08, vol_tolerance=0.012（v185 扫描最优，Sharpe 最大化）
+    "target_vol_beta": 0.15,
     "target_vol_alpha": 0.20,
-    "vol_tolerance": 0.012,  # = target_vol_beta * 15%，等比缩放
+    "vol_tolerance": 0.0225,  # = target_vol_beta * 15%，等比缩放
     "ewma_lambda": 0.94,
     "corr_window": 60,
     "corr_sma_window": 5,
