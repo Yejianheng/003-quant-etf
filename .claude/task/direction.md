@@ -2,59 +2,78 @@
 
 > 顾问写入。执行者只读、执行、写 outcome.md。
 
-## 任务：提升年化收益 — target_vol_beta 0.08→0.10
+## 任务：股债相关性熔断鲁棒性扫描
 
 ### 背景
 
-v185 将 `target_vol_beta` 从 0.10 降到 0.08，年化从 14%→9%。v186 50/50 组合挽回一部分到 10.47%。当前实际年化 8.63%，回撤 -7.71%，远在 20% 硬约束内。用户明确可以接受更多回撤换更高收益。
+熔断是系统最强防线（ablation ΔSharpe +0.85），但三个参数从未扫描：corr_window=60, corr_sma_window=5, corr_threshold=0.0。需回答：0.0 这个阈值脆弱吗？
 
-### 步骤 1：target_vol_beta 0.08 → 0.10
+### 步骤 1：smoothed_corr 历史分布
 
-修改 `src/signal_generator.py`，`DEFAULT_PARAMS`：
-```
-"target_vol_beta": 0.10,
-"vol_tolerance": 0.015,
-```
+```python
+from src.backtest_engine import run_backtest
+from src.signal_generator import DEFAULT_PARAMS
+import pandas as pd, numpy as np
+import copy
 
-`vol_tolerance` 同步恢复为 `0.015`（= beta×15%，等比缩放）。
+names=['沪深300','创业板','纳指','黄金','国债ETF']
+codes=['510300','159915','513100','518880','511010']
+prices={n:pd.read_parquet(f'data/{c}.parquet') for n,c in zip(names,codes)}
 
-### 步骤 2：重跑验证
+# 跑一次全回测提取所有 smoothed_corr
+r = run_backtest(prices, 1000000, params=copy.deepcopy(DEFAULT_PARAMS))
+# 从 signal 中逐日提取... 需要修改 recorder 或从 backtest_engine 抓取
 
-```bash
-python scripts/four_tables.py
-python scripts/nav_chart.py
-```
-
-对比修复前后：
-
-| 指标 | 修复前 (0.08) | 修复后 (0.10) |
-|------|------|------|
-| 年化 | 8.6% | ? |
-| 回撤 | -7.7% | ? |
-| Sharpe | 1.35 | ? |
-
-### 步骤 3（条件）：如果年化仍 < 10%
-
-修改 `src/signal_generator.py`，50/50 → 70/30：
-```
-final_multiplier = 0.7 * dd_mult + 0.3 * min(sf, dd_mult)
+# 或者：独立计算全期 smoothed_corr 序列（不用回测）
+from src.correlation_circuit_breaker import stock_basket_returns, rolling_correlation
+# 对每只股票计算 log 收益 → 等权篮子 → 与国债做 60 日滚动相关 → 5日 SMA
 ```
 
-重跑验证。
+输出：
+- smoothed_corr 的均值、标准差、min/max
+- 分位数：50%/75%/90%/95%/99%
+- 突破各阈值的交易日数：>0.0, >0.05, >0.1, >0.15, >0.2, >0.3
+- smoothed_corr 时序图数据（日期 + 值，存 CSV）
+
+### 步骤 2：corr_threshold 敏感性扫描
+
+Patch signal_generator DEFAULT_PARAMS 的 corr_threshold，扫描：
+[-0.1, -0.05, 0.0, 0.05, 0.10, 0.15]
+
+每档跑一次 `run_backtest()`，记录：Sharpe、年化、回撤、CB 触发天数、CB 触发占比。
+
+输出对比表：
+
+| threshold | 触发天数 | 触发% | Sharpe | 年化 | 回撤 |
+|------|------|------|------|------|------|
+
+### 步骤 3：corr_window 敏感性扫描
+
+固定 corr_threshold=0.0, corr_sma_window=5，扫描：
+corr_window = [20, 40, 60, 90, 120]
+
+输出同上格式对比表。
+
+### 步骤 4：corr_sma_window 敏感性扫描
+
+固定 corr_threshold=0.0, corr_window=60，扫描：
+corr_sma_window = [1, 3, 5, 10, 20]
+
+输出同上格式对比表。
+
+### 步骤 5：结论写入
+
+将步骤 1-4 的结果写入 `attribution/system_audit.md`，替换 §5.4（未测敏感度）表格，新增 §5.5（熔断鲁棒性评估）。
 
 ### 验收
 
-- [ ] target_vol_beta 恢复为 0.10
-- [ ] 年化回升 > 10%（预期 ~12-14%）
-- [ ] 回撤仍在 20% 以内
-- [ ] 全量 pytest 零回归
-- [ ] `nav_2026.html` + `four_tables_report.html` 更新
+- [ ] smoothed_corr 全期分布统计完成
+- [ ] 三维扫描结果（threshold/window/sma）
+- [ ] `attribution/system_audit.md` 已更新
+- [ ] 确认阈值 0.0 的鲁棒裕量
 
 ### 审核协议
 
-`src/signal_generator.py` 在保护区 + `protected-contracts.json` 的 `target_vol_beta` 为受保护值。需走内容级保护流程：
-
-1. 先跑 CLI validate
-2. 再跑 CLI audit
-3. 写 outcome → 等人批 → gate → 令牌 Edit
-4. 修改后跑 `check_values.py` 确认新值写入
+步骤 2-4 中 corr_window/corr_sma_window/corr_threshold 在 `protected-contracts.json` 为受保护值，需走内容级保护：
+1. 扫描脚本使用临时参数副本（不修改 DEFAULT_PARAMS），仅读取
+2. 如最终需修改生产值，走完整 CLI validate + audit 流程
