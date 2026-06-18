@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# [2026-06-18] 修改：传递 records_df 到 generate_four_tables_report，支持逆回购统计
 # [2026-06-18] 新增：四张表收益归因入口脚本
 """策略收益归因 — 四张表全量审计。输出 output/four_tables_report.html"""
 import os
@@ -86,7 +87,7 @@ def main():
     print("\n[4/5] 生成报表...")
     results = {"factor_return": fa, "timing": td, "tail_risk": tr, "stability": sm}
     report_path = os.path.join(OUTPUT_DIR, "four_tables_report.html")
-    generate_four_tables_report(results, report_path)
+    generate_four_tables_report(results, report_path, records_df=records_df)
 
     print(f"\n[5/5] 完成！报表: {report_path}")
     print("=" * 60)

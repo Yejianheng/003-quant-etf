@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：新增逆回购可视化（背景带 + 净值虚线 + 表格统计行）
 # [2026-06-16] 修改：去 A/B 参考线，只保留 50/50 生产策略 + 5 ETF 基准
 # [2026-06-16] 修复：移除手动 50/50 平均逻辑，主策略直接取 B（生产 50/50，避免二次平均成 75/25）
 # [2026-06-12] 修改：新增 A(无sf)/B(sf+0.08)/50-50 三策略对比
@@ -29,6 +30,7 @@ from scripts.update_data import update_single_etf
 
 START_DATE = "2026-01-01"
 PAGE_SIZE = 20
+REPO_ANNUAL_RATE = 0.02
 
 COLORS = {
     "50/50 组合": "#dc3912",
@@ -37,6 +39,7 @@ COLORS = {
     "纳指": "#6aa84f",
     "黄金": "#bf9000",
     "国债ETF": "#674ea7",
+    "逆回购净值": "#999999",
 }
 
 
@@ -152,13 +155,18 @@ def _build_table_data(records_df, etf_names):
             weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
 
         total_weight = sum(weights.values())
-        cash = 1.0 - total_weight
 
         # --- 操作列 = 明日将执行的调仓（当日信号 vs 前日信号） ---
         # new_weights = 当日信号等权（明日将持）；old_weights = 前日信号等权（今日实际持）
         new_weights = _defense_active_weights(row, etf_names)
         old_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
         action = _format_action(old_weights, new_weights, etf_names)
+
+        # --- 逆回购 ---
+        repo_amount = float(row.get("repo_amount", 0.0))
+        cb_triggered = bool(row.get("circuit_breaker_triggered", False))
+        defense_count = int(row.get("defense_count", 0))
+        is_repo_day = cb_triggered or defense_count == 0
 
         # --- NAV（当日实际 NAV） ---
         nav = float(row["nav"]) / first_nav
@@ -169,7 +177,9 @@ def _build_table_data(records_df, etf_names):
             "date": date_str,
             "nav": round(nav, 4),
             "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
-            "cash": round(cash, 4),
+            "cash": round(1.0 - total_weight, 4),
+            "repo_amount": round(repo_amount / float(row["nav"]), 4) if float(row["nav"]) != 0 else 0.0,
+            "is_repo_day": is_repo_day,
             "action": action,
             "delta": delta_nav,
         })
@@ -196,6 +206,55 @@ def generate_html(
     labels = _dates_to_labels(strategy_nav.index)
     label_json = json.dumps(labels, ensure_ascii=False)
 
+    # --- 逆回购数据 ---
+    # repo NAV: 纯逆回购累计净值（年化 2% 每日复利）
+    n_days_repo = len(strategy_nav)
+    repo_nav_vals = [1.0]
+    for _ in range(1, n_days_repo):
+        repo_nav_vals.append(repo_nav_vals[-1] * (1.0 + REPO_ANNUAL_RATE / 252.0))
+
+    # repo 背景带：空仓期标记（熔断 或 defense_count==0）
+    aligned_df = records_df.loc[strategy_nav.index]
+    repo_periods = []
+    for _, row in aligned_df.iterrows():
+        cb = bool(row.get("circuit_breaker_triggered", False))
+        dc = int(row.get("defense_count", 0))
+        repo_periods.append(1 if (cb or dc == 0) else 0)
+
+    # repo 统计
+    repo_interest_total = 0.0
+    repo_days = 0
+    cb_days = 0
+    max_consecutive_repo = 0
+    current_consecutive = 0
+    for _, row in aligned_df.iterrows():
+        cb = bool(row.get("circuit_breaker_triggered", False))
+        dc = int(row.get("defense_count", 0))
+        repo_amt = float(row.get("repo_amount", 0.0))
+        repo_interest_total += repo_amt * (REPO_ANNUAL_RATE / 252.0)
+        if cb or dc == 0:
+            repo_days += 1
+            current_consecutive += 1
+            max_consecutive_repo = max(max_consecutive_repo, current_consecutive)
+        else:
+            current_consecutive = 0
+        if cb:
+            cb_days += 1
+    total_days_data = len(aligned_df)
+    # 归一化 repo 利息（除以首日 nav）使其与图表单位一致
+    first_nav_for_stats = float(aligned_df.iloc[0]["nav"]) if len(aligned_df) > 0 else 1.0
+    repo_interest_normalized = repo_interest_total / first_nav_for_stats if first_nav_for_stats != 0 else 0.0
+
+    repo_periods_json = json.dumps(repo_periods)
+    repo_stats = {
+        "repo_interest": round(repo_interest_normalized, 4),
+        "repo_days": repo_days,
+        "total_days": total_days_data,
+        "cb_days": cb_days,
+        "max_consecutive_repo": max_consecutive_repo,
+    }
+    repo_stats_json = json.dumps(repo_stats, ensure_ascii=False)
+
     datasets = []
 
     # 50/50 组合（主策略，粗线）
@@ -208,6 +267,19 @@ def generate_html(
         "pointRadius": 0,
         "fill": False,
         "tension": 0,
+    })
+
+    # 逆回购净值（虚线）
+    datasets.append({
+        "label": "逆回购净值",
+        "data": [round(v, 6) for v in repo_nav_vals],
+        "borderColor": COLORS["逆回购净值"],
+        "backgroundColor": COLORS["逆回购净值"],
+        "borderWidth": 1.5,
+        "pointRadius": 0,
+        "fill": False,
+        "tension": 0,
+        "borderDash": [4, 4],
     })
 
     for name in DEFENSE_NAMES:
@@ -302,6 +374,13 @@ def generate_html(
   </table>
 </div>
 
+<div class="table-wrapper" style="margin-top:16px;">
+  <table id="repoStatsTable">
+    <thead><tr><th colspan="2">逆回购统计</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
 <div class="pagination">
   <button id="prevBtn" onclick="changePage(-1)">上一页</button>
   <span class="page-info" id="pageInfo">第 1/{total_pages} 页</span>
@@ -323,6 +402,9 @@ let currentPage = 1;
 const labels = {label_json};
 const datasets = {datasets_json};
 
+const repoPeriods = {repo_periods_json};
+const repoStats = {repo_stats_json};
+
 const breakevenPlugin = {{
   id: 'breakevenLine',
   afterDraw(chart) {{
@@ -337,6 +419,37 @@ const breakevenPlugin = {{
     ctx.moveTo(chart.chartArea.left, yPos);
     ctx.lineTo(chart.chartArea.right, yPos);
     ctx.stroke();
+    ctx.restore();
+  }}
+}};
+
+const repoBandPlugin = {{
+  id: 'repoBand',
+  beforeDraw(chart) {{
+    const {{ ctx, chartArea, scales: {{ x }} }} = chart;
+    if (!repoPeriods || repoPeriods.length === 0) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(180, 180, 180, 0.15)';
+    let inBand = false;
+    let bandStart = 0;
+    const barW = x.getPixelForValue(1) - x.getPixelForValue(0);
+    for (let i = 0; i <= repoPeriods.length; i++) {{
+      const isRepo = i < repoPeriods.length && repoPeriods[i] === 1;
+      if (isRepo && !inBand) {{
+        inBand = true;
+        bandStart = i;
+      }} else if (!isRepo && inBand) {{
+        inBand = false;
+        const x0 = x.getPixelForValue(bandStart) - barW / 2;
+        const x1 = x.getPixelForValue(i - 1) + barW / 2;
+        ctx.fillRect(x0, chartArea.top, x1 - x0, chartArea.bottom - chartArea.top);
+      }}
+    }}
+    if (inBand) {{
+      const x0 = x.getPixelForValue(bandStart) - barW / 2;
+      const x1 = x.getPixelForValue(repoPeriods.length - 1) + barW / 2;
+      ctx.fillRect(x0, chartArea.top, x1 - x0, chartArea.bottom - chartArea.top);
+    }}
     ctx.restore();
   }}
 }};
@@ -373,7 +486,7 @@ new Chart(document.getElementById('navChart'), {{
       }}
     }}
   }},
-  plugins: [breakevenPlugin]
+  plugins: [breakevenPlugin, repoBandPlugin]
 }});
 
 // ===== Table =====
@@ -391,7 +504,7 @@ function renderTable() {{
       const w = row.weights[j];
       html += '<td>' + (w > 0 ? (w * 100).toFixed(0) + '%' : '—') + '</td>';
     }}
-    html += '<td>' + (row.cash > 0 ? (row.cash * 100).toFixed(0) + '%' : '—') + '</td>';
+    html += '<td>' + (row.repo_amount > 0 ? (row.repo_amount * 100).toFixed(0) + '%' : '—') + '</td>';
     html += '<td class="action-cell">' + row.action + '</td>';
     if (row.delta === null) {{
       html += '<td>—</td>';
@@ -408,6 +521,16 @@ function renderTable() {{
   document.getElementById('prevBtn').disabled = currentPage <= 1;
   document.getElementById('nextBtn').disabled = currentPage >= totalPages;
   document.getElementById('pageJumpInput').value = currentPage;
+}}
+
+function renderRepoStats() {{
+  const tbody = document.querySelector('#repoStatsTable tbody');
+  if (!tbody || !repoStats) return;
+  tbody.innerHTML =
+    '<tr><td>累计逆回购利息</td><td>' + repoStats.repo_interest.toFixed(4) + '</td></tr>' +
+    '<tr><td>空仓天数</td><td>' + repoStats.repo_days + ' / ' + repoStats.total_days + ' 天</td></tr>' +
+    '<tr><td>熔断触发天数</td><td>' + repoStats.cb_days + ' 天</td></tr>' +
+    '<tr><td>最长连续空仓</td><td>' + repoStats.max_consecutive_repo + ' 天</td></tr>';
 }}
 
 function changePage(delta) {{
@@ -455,6 +578,7 @@ function jumpToDate() {{
 }}
 
 renderTable();
+renderRepoStats();
 </script>
 </body>
 </html>"""

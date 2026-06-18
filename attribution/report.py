@@ -1,20 +1,28 @@
 # [2026-06-18] 新增：四张表 HTML 报表生成
+# [2026-06-18] 修改：generate_four_tables_report 新增 records_df 参数，表3尾部审计增加逆回购统计行
 import os
 import numpy as np
+import pandas as pd
+
+REPO_ANNUAL_RATE = 0.02
 
 
-def generate_four_tables_report(results: dict, output_path: str) -> str:
+def generate_four_tables_report(results: dict, output_path: str, records_df: pd.DataFrame = None) -> str:
     """
     生成自包含 HTML 报表，内含四张表 + 简要解读。
 
     results: {"factor_return": {...}, "timing": {...}, "tail_risk": {...}, "stability": {...}}
+    records_df: 可选，回测日记录 DataFrame，用于提取逆回购统计
     """
     fa = results.get("factor_return", {})
     td = results.get("timing", {})
     tr = results.get("tail_risk", {})
     sm = results.get("stability", {})
 
-    html = _build_html(fa, td, tr, sm)
+    # 逆回购统计
+    repo_stats = _compute_repo_stats(records_df)
+
+    html = _build_html(fa, td, tr, sm, repo_stats)
 
     d = os.path.dirname(output_path)
     if d:
@@ -33,7 +41,37 @@ def _fmt(v, decimals=4):
     return str(v)
 
 
-def _build_html(fa, td, tr, sm):
+def _compute_repo_stats(records_df):
+    """从 records_df 提取逆回购统计。records_df 为 None 时返回 None。"""
+    if records_df is None or len(records_df) == 0:
+        return None
+
+    cb_days = int(records_df.get("circuit_breaker_triggered", pd.Series([False] * len(records_df))).sum())
+    defense_count = records_df.get("defense_count", pd.Series([0] * len(records_df)))
+    empty_days = int((defense_count == 0).sum())
+
+    repo_amount_col = records_df.get("repo_amount", pd.Series([0.0] * len(records_df)))
+    total_repo_interest = float((repo_amount_col * (REPO_ANNUAL_RATE / 252.0)).sum())
+
+    max_consecutive = 0
+    current = 0
+    for dc in defense_count:
+        if dc == 0:
+            current += 1
+            max_consecutive = max(max_consecutive, current)
+        else:
+            current = 0
+
+    return {
+        "cb_days": cb_days,
+        "empty_days": empty_days,
+        "total_days": len(records_df),
+        "repo_interest": total_repo_interest,
+        "max_consecutive_empty": max_consecutive,
+    }
+
+
+def _build_html(fa, td, tr, sm, repo_stats=None):
     def _table1():
         rows = ""
         betas = fa.get("betas", {})
@@ -80,6 +118,15 @@ def _build_html(fa, td, tr, sm):
         """
 
     def _table3():
+        # 逆回购行（如有 records_df 才显示）
+        repo_rows = ""
+        if repo_stats:
+            cb_pct = repo_stats["cb_days"] / repo_stats["total_days"] * 100 if repo_stats["total_days"] > 0 else 0
+            repo_rows += f'<tr><td>逆回购 — 熔断触发天数</td><td colspan="2">{repo_stats["cb_days"]} 天（占比 {cb_pct:.1f}%）</td></tr>'
+            repo_rows += f'<tr><td>逆回购 — 空仓天数</td><td colspan="2">{repo_stats["empty_days"]} 天</td></tr>'
+            repo_rows += f'<tr><td>逆回购 — 累计利息</td><td colspan="2">{repo_stats["repo_interest"]:,.2f} 元</td></tr>'
+            repo_rows += f'<tr><td>逆回购 — 最长连续空仓</td><td colspan="2">{repo_stats["max_consecutive_empty"]} 天</td></tr>'
+
         skew = _fmt(tr.get("skewness"), 3)
         dd = _fmt(tr.get("max_drawdown"), 3)
         dur = tr.get("max_dd_duration_days", 0)
@@ -97,6 +144,7 @@ def _build_html(fa, td, tr, sm):
         <tr><td>最大回撤</td><td>{dd}</td><td>—</td></tr>
         <tr><td>最大回撤持续（天）</td><td>{dur}</td><td>{tr.get("benchmark_max_dd_duration", 0)}</td></tr>
         <tr><td>卖保险警告</td><td colspan="2">{warn}</td></tr>
+        {repo_rows}
         </tbody></table>
         <h4>最差 5 个月</h4>
         <table><thead><tr><th>月份</th><th>收益</th></tr></thead><tbody>{worst_rows}</tbody></table>

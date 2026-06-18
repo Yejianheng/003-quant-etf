@@ -1,3 +1,4 @@
+# [2026-06-18] 新增：repo 可视化元素测试（逆回购净值虚线 + 空仓背景带 + repo 汇总）
 # [2026-06-16] 修改：去 A/B 参考线，颜色断言更新为 1 策略 + 5 ETF（6 色）
 # [2026-06-16] 修复：同步表头断言"今日调仓"→"明日调仓"+颜色断言匹配当前 COLORS
 # [2026-06-11] 修改：适配 T+1 前移（操作→今日调仓、建仓、权重箭头格式）
@@ -58,14 +59,14 @@ class TestNavChart:
         assert os.path.exists(output_path), f"HTML 未生成: {output_path}"
 
         html = open(output_path, encoding="utf-8").read()
-        # 验证 6 组数据（策略 + 5 ETF）：Chart.js datasets 数组含 6 个对象
+        # 验证 7 组数据（策略 + 逆回购 + 5 ETF）
         dataset_count = len(re.findall(r'"label":\s*"', html))
-        assert dataset_count == 6, f"应有 6 个 dataset（1 策略 + 5 ETF），实际 {dataset_count}"
+        assert dataset_count == 7, f"应有 7 个 dataset（1 策略 + 逆回购 + 5 ETF），实际 {dataset_count}"
         # 验证 canvas 元素
         canvas_count = len(re.findall(r'<canvas\b', html, re.IGNORECASE))
         assert canvas_count >= 1, f"应有 ≥1 个 <canvas>，实际 {canvas_count}"
         # 验证颜色
-        for color in ["#dc3912", "#3366cc", "#e06666", "#6aa84f", "#bf9000", "#674ea7"]:
+        for color in ["#dc3912", "#3366cc", "#e06666", "#6aa84f", "#bf9000", "#674ea7", "#999999"]:
             assert color in html, f"HTML 中应包含颜色 {color}"
         # 验证标题
         assert "2026 净值对比" in html
@@ -152,3 +153,24 @@ class TestNavChart:
         # 操作列应有实际内容（建仓/权重箭头格式）
         assert "建仓" in html or "买入" in html or "卖出" in html, \
             "操作列应包含调仓描述"
+
+    def test_repo_visualization_elements(self, tmp_path):
+        """HTML 含逆回购净值虚线 + 空仓背景带 + repo 汇总统计。"""
+        data_dir = str(tmp_path / "data")
+        output_path = str(tmp_path / "nav_2026.html")
+        _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
+        mock_update = MagicMock()
+
+        from scripts.nav_chart import main
+        with patch("scripts.nav_chart.update_single_etf", mock_update):
+            main(data_dir=data_dir, output_path=output_path)
+
+        html = open(output_path, encoding="utf-8").read()
+        # 逆回购净值 dataset
+        assert "逆回购净值" in html, "HTML 应包含 逆回购净值 dataset"
+        # 逆回购背景色带（repoBand 插件）
+        assert "repoBand" in html, "HTML 应包含 repoBand 插件"
+        # 现金列改为 repo 金额显示
+        assert "repo_amount" in html, "tableData JSON 应包含 repo_amount 字段"
+        # repo 汇总统计行
+        assert "repoStats" in html, "HTML 应包含 repoStats 汇总数据"
