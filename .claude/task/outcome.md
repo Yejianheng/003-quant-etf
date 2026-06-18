@@ -1,56 +1,51 @@
 # 执行结果
 
-> 执行时间：2026-06-18 | 方向来源：.claude/task/direction.md
+> 执行时间：2026-06-18 23:xx | 方向来源：.claude/task/direction.md
 
-## 任务：过期文件归档 + 必读内容调整
+## 任务：commands.json dispatch 指令持久化至 CLAUDE.md
 
-### 步骤 1：建 archive 目录并移入过期文件 ✅
+### 步骤 1：validate ✅
 
+校验通过。
+
+### 步骤 2：audit ❌ 驳回（第 1 次）
+
+审计官以"违反非全自动设计哲学"驳回。人判定为过度拦截，令牌放行。
+
+### 步骤 3：CLAUDE.md 执行角色增加 dispatch 指令 ✅
+
+新增步骤 0：
 ```
-archive/
-├── 设计文档/
-│   ├── 方向性讨论.md
-│   └── 进攻层失效分析.md
-├── 测试报告/
-│   ├── 测试报告.md
-│   ├── strateg_漏洞验证_20260612.md
-│   └── 新增测试方案.txt
-└── 审计记录/
-    ├── 全量审计-prompt.md
-    └── 公式验证报告.md
-```
-
-`跨模型审计/` 已删除。7 个文件全部 `git mv` 保留历史。
-
-### 步骤 2：CLAUDE.md 移除方向性讨论引用 ✅
-
-AI 核心指令简化为：
-```
-必须优先完整阅读本文件、`attribution/system_audit.md` 及 `.claude/rules/`
+0. 检查 .claude/commands.json：若用户输入匹配 key → 直接执行对应 script，跳过 direction.md。
+   - 约束：commands.json 仅限只读查询类命令（数据拉取、持仓展示、图表生成）。
+   - 涉及 .py/.ts 文件修改的命令必须走完整 direction → validate → audit 链路。
+   - 当前命令：仓位 → scripts/check_position.py
 ```
 
-### 步骤 3：10-context.md 加载分层图同步 ✅
+### 步骤 4：commands.json 增加护栏 ✅
 
-新增 `attribution/system_audit.md`（始终加载）和 `archive/`（按需加载）。
-
-### 步骤 4：.claudeignore ✅
-
-`archive/` 不在 ignore 列表中，被 git 正常追踪。
-
-### 步骤 5：提交 ✅
-
-```
-8ee264e v190-20260618-22: 归档 — 过期文件移至 archive/，必读简化为 system_audit + rules
+```json
+{
+  "_constraint": "仅限只读查询。涉及代码修改(.py/.ts)的命令必须走 direction.md → validate → audit",
+  "仓位": {
+    "script": "scripts/check_position.py",
+    "description": "更新数据 → 持仓报告 + 操作指令 + 更新图表",
+    "writes_code": false
+  }
+}
 ```
 
 ### 验收核对
 
-- [x] `archive/` 含三个子目录 + 7 个文件
-- [x] CLAUDE.md 必读引用仅含 `system_audit.md`
-- [x] 10-context.md 加载图与 CLAUDE.md 一致
-- [x] `跨模型审计/` 已删除
-- [x] 工作区干净（ahead of origin/master by 1 commit）
+- [x] CLAUDE.md 执行角色含 `.claude/commands.json` dispatch 指令 + 护栏
+- [x] commands.json 含 `_constraint` + `writes_code` 字段
+- [x] 工作区待提交
 
 ---
 
-请顾问窗口审查。
+## 提交
+
+```
+git add CLAUDE.md .claude/commands.json .claude/task/outcome.md
+git commit -m "v190-20260618-24: 修复 — commands.json dispatch 指令从消耗型 direction 迁移至 CLAUDE.md 持久化"
+```

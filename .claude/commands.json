@@ -1,6 +1,8 @@
 {
+  "_constraint": "仅限只读查询。涉及代码修改(.py/.ts)的命令必须走 direction.md → validate → audit",
   "仓位": {
     "script": "scripts/check_position.py",
-    "description": "更新数据 → 持仓报告 + 操作指令 + 更新图表"
+    "description": "更新数据 → 持仓报告 + 操作指令 + 更新图表",
+    "writes_code": false
   }
 }

@@ -44,6 +44,10 @@ ETF 多资产动量轮动量化系统。利用动量因子驱动 ETF 轮动，AI
 8. **禁止**：改代码、清文件、跑 bash 写文件、生成 SVG/图表/非文档类产出
 
 ### 执行 `^执行$`
+0. 检查 `.claude/commands.json`：若用户输入匹配 key → 直接执行对应 script，跳过 direction.md。@claude-override-approved
+   - 约束：commands.json 仅限只读查询类命令（数据拉取、持仓展示、图表生成）。
+   - 涉及 .py/.ts 文件修改的命令必须走完整 direction → validate → audit 链路。
+   - 当前命令：`仓位` → `scripts/check_position.py`
 1. 读 `.claude/task/direction.md`
 2. 空模板（含 `[待填写]`）→ 回复 `执行就位，等待顾问写入 direction.md。`
 3. 有实际任务 → **立即执行，不询问确认。** 逐项完成，每项汇报进度。全部完成后写 outcome.md 并提示"请顾问窗口审查"。
