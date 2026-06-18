@@ -62,12 +62,30 @@ def _make_cn_prices(n=200, seed=42):
 class TestFetchUSData:
     """数据获取 — yfinance → {ticker: DataFrame}"""
 
-    def test_fetch_us_data_returns_dict(self):
+    def test_fetch_us_data_returns_dict(self, monkeypatch):
         """mock yfinance.download → 返回 {ticker: DataFrame} 格式"""
-        from scripts.backtest_us import fetch_us_data
-
-        # mock 验证接口签名（不实际调用 yfinance）
+        # 构造 mock download 返回值（MultiIndex columns）
+        dates = pd.date_range("2024-01-01", "2024-06-01", freq="B")
+        n = len(dates)
+        rng = np.random.RandomState(42)
         tickers = ["SPY", "QQQ", "GLD", "SHY", "BIL"]
+        # yfinance MultiIndex 格式: (metric, ticker)
+        arrays = {}
+        for t in tickers:
+            price = 100 * np.exp(np.cumsum(rng.normal(0.0005, 0.01, n)))
+            arrays[("Open", t)] = price * 0.99
+            arrays[("High", t)] = price * 1.02
+            arrays[("Low", t)] = price * 0.98
+            arrays[("Close", t)] = price
+            arrays[("Volume", t)] = np.full(n, 1e6)
+
+        mock_df = pd.DataFrame(arrays, index=dates)
+        mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
+
+        import yfinance as yf
+        monkeypatch.setattr(yf, "download", lambda *a, **kw: mock_df)
+
+        from scripts.backtest_us import fetch_us_data
         result = fetch_us_data(tickers, start="2024-01-01", end="2024-06-01")
         assert isinstance(result, dict)
         for t in tickers:
@@ -89,8 +107,13 @@ class TestAlignDates:
         df2 = pd.DataFrame({"close": np.ones(len(dates2))}, index=dates2)
 
         result = align_dates_union({"A": df1, "B": df2})
-        assert len(result) > max(len(df1), len(df2)), (
-            f"并集应大于单个长度，实际 {len(result)}"
+        # 对齐后每个 DataFrame 应为并集日期长度
+        union_len = len(result["A"])
+        assert union_len > max(len(df1), len(df2)), (
+            f"并集应大于单个长度，实际并集={union_len}, A={len(df1)}, B={len(df2)}"
+        )
+        assert len(result["B"]) == union_len, (
+            f"对齐后 B 应与 A 同长度，实际 {len(result['B'])} vs {union_len}"
         )
 
 
