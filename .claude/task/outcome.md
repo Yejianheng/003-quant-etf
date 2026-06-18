@@ -2,25 +2,77 @@
 
 > 执行时间：2026-06-18 | 方向来源：.claude/task/direction.md
 
-## 任务：0.08 策略本体版本封存
+## 任务：股债相关性熔断鲁棒性扫描
 
-### 步骤 1：打 tag ✅
+### 步骤 1：smoothed_corr 全期历史分布 ✅
 
-```bash
-git tag -a v0.08-canonical f8abc9e
-```
+- 日期范围：2013-11-07 ~ 2026-06-17，3064 交易日
+- 均值 -0.112，标准差 0.189，中位数 -0.109
+- P90: 0.107, P95: 0.182, P99: 0.306
+- 突破 >0.0: 812 天 (26.5%)，>0.1: 333 天 (10.9%)
+- 时序 CSV：`output/smoothed_corr_history.csv`
 
-封存点 `f8abc9e v189-20260616-1`，含完整策略架构说明和参数记录。
+### 步骤 2：corr_threshold 敏感性扫描 ✅
 
-### 步骤 2：推送 tag ✅
+| threshold | Sharpe | 年化 | 回撤 | CB触发% |
+|------|------|------|------|------|
+| -0.10 | 1.047 | 9.5% | -13.5% | 46.4% |
+| -0.05 | 1.217 | 12.3% | -13.1% | 34.4% |
+| **0.00** | **1.226** | **13.1%** | **-13.1%** | **25.3%** |
+| 0.05 | 1.092 | 11.3% | -17.3% | 17.9% |
+| 0.10 | 1.070 | 11.2% | -18.4% | 9.5% |
+| 0.15 | 1.021 | 11.0% | -18.2% | 5.7% |
 
-`git push origin v0.08-canonical` → `[new tag]` 远端可见。
+0.0 最优。>0.05 回撤跳至 -17%，危险。
+
+### 步骤 3：corr_window 敏感性扫描 ✅
+
+| window | Sharpe | 年化 | 回撤 |
+|------|------|------|------|
+| 20 | 1.041 | 10.3% | -15.8% |
+| 40 | 1.087 | 11.1% | -15.1% |
+| **60** | **1.226** | **13.1%** | **-13.1%** |
+| 90 | 1.100 | 11.1% | -17.3% |
+| 120 | 1.160 | 12.0% | -17.1% |
+
+60 最优，短窗口噪声多，长窗口反应慢。
+
+### 步骤 4：corr_sma_window 敏感性扫描 ✅
+
+| sma | Sharpe | 年化 | 回撤 |
+|------|------|------|------|
+| 1-20 | 1.152-1.226 | 12.2-13.1% | 全部 -13.1% |
+
+SMA 高度鲁棒，5 天略微最优。CB 触发天数全区间 753-766（<2% 差距）。
+
+### 步骤 5：attribution/system_audit.md 已更新 ✅
+
+- §6.5 替换原"未测敏感度"表格为三维扫描完整结果
+- §6.6 新增熔断鲁棒性评估
+- 总结第 4 点已更新
 
 ### 验收核对
 
-- [x] `git tag -l v0.08-canonical` 显示 tag 存在
-- [x] `git ls-remote origin v0.08-canonical` 远端可见
-- [x] `git log --oneline -1` → `81d7a64`，HEAD 仍在 0.15 生产版本
+- [x] smoothed_corr 全期分布统计完成
+- [x] 三维扫描结果（threshold/window/sma）
+- [x] `attribution/system_audit.md` 已更新
+- [x] 确认阈值 0.0 的鲁棒裕量：不脆弱，恰好是最优值
+
+### 关键发现
+
+corr_threshold=0.0 不脆弱。当前 (0.0, 60, 5) 就是最优组合。唯一需注意：threshold 不能正向偏离超 0.05（回撤逼近 liquidate 18% 线）。
+
+### 涉及文件
+
+| 文件 | 操作 |
+|------|------|
+| `scripts/corr_robustness_scan.py` | 新增 |
+| `tests/test_corr_robustness_scan.py` | 新增 |
+| `attribution/system_audit.md` | 修改 §6.5-§6.6 + 总结 |
+| `output/smoothed_corr_history.csv` | 新增（被 gitignore） |
+| `output/corr_threshold_scan.csv` | 新增（被 gitignore） |
+| `output/corr_window_scan.csv` | 新增（被 gitignore） |
+| `output/corr_sma_window_scan.csv` | 新增（被 gitignore） |
 
 ---
 
