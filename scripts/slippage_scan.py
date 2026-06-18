@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：per-ETF 价差替代统一滑点（volume→流动性三档 3/8/15bp）
 # [2026-05-30] 新增：滑点与手续费扫描 — 4 档摩擦纯防御全量 2014-2026
 
 import os
@@ -31,12 +32,42 @@ FIXED_PARAMS = {
     "defense_ratio": 1.00,
 }
 
-SCENARIOS = [
-    {"label": "理想", "slippage_bps": 0,  "commission_rate": 0.0,     "总摩擦(bp)": 0},
-    {"label": "乐观", "slippage_bps": 5,  "commission_rate": 0.00025,  "总摩擦(bp)": 12.5},
-    {"label": "中性", "slippage_bps": 10, "commission_rate": 0.00025,  "总摩擦(bp)": 22.5},
-    {"label": "悲观", "slippage_bps": 20, "commission_rate": 0.0005,   "总摩擦(bp)": 45},
+# per-ETF 价差（bp）— 从 volume 列日均成交额估算，按流动性分三档
+# 高流动性（日均 >10 亿）：3bp | 中流动性：8bp | 低流动性（日均 <2 亿）：15bp
+SPREAD_TIERS = [
+    {"label": "高流动性", "spread_bps": 3},
+    {"label": "中流动性", "spread_bps": 8},
+    {"label": "低流动性", "spread_bps": 15},
 ]
+
+SCENARIOS = [
+    {"label": "理想", "spread_mult": 0.0, "commission_rate": 0.0},
+    {"label": "乐观", "spread_mult": 1.0, "commission_rate": 0.00025},
+    {"label": "中性", "spread_mult": 2.0, "commission_rate": 0.00025},
+    {"label": "悲观", "spread_mult": 3.0, "commission_rate": 0.0005},
+]
+
+
+def compute_spread_tiers(prices: dict) -> dict[str, float]:
+    """从 volume 列估算日均成交额，按流动性三档分配 per-ETF 价差（bp）。
+
+    返回 {etf_name: spread_bps}。
+    """
+    spreads = {}
+    for name, df in prices.items():
+        if "volume" not in df.columns or len(df) < 20:
+            spreads[name] = 15.0  # 数据不足默认低流动性
+            continue
+        avg_volume = float(df["volume"].tail(252).mean())
+        avg_close = float(df["close"].tail(252).mean())
+        avg_turnover = avg_volume * avg_close
+        if avg_turnover > 1e9:
+            spreads[name] = 3.0
+        elif avg_turnover > 2e8:
+            spreads[name] = 8.0
+        else:
+            spreads[name] = 15.0
+    return spreads
 
 
 def load_all_prices():
@@ -87,13 +118,23 @@ def main():
     prices = load_all_prices()
     print(f"\n加载 ETF: {list(prices.keys())}")
 
+    base_spreads = compute_spread_tiers(prices)
+    print("\nper-ETF 价差 (bp):")
+    for name in ["沪深300", "创业板", "纳指", "黄金", "国债ETF"]:
+        if name in base_spreads:
+            tier = "高" if base_spreads[name] <= 3 else ("中" if base_spreads[name] <= 8 else "低")
+            print(f"  {name}: {base_spreads[name]}bp ({tier}流动性)")
+
     all_rows = []
     bench_sharpe = None
 
     for sc in SCENARIOS:
         label = sc["label"]
+        mult = sc["spread_mult"]
+        slippage_map = {k: v * mult for k, v in base_spreads.items()}
+        avg_spread = sum(slippage_map.values()) / len(slippage_map) if slippage_map else 0
         print(f"\n{'─' * 50}")
-        print(f"  [{label}] slippage={sc['slippage_bps']}bp, "
+        print(f"  [{label}] per-ETF spread×{mult:.1f} (avg {avg_spread:.0f}bp), "
               f"commission={sc['commission_rate']:.5f} (万{sc['commission_rate']*10000:.1f})")
 
         result = run_backtest(
@@ -101,8 +142,9 @@ def main():
             initial_capital=1_000_000,
             params=FIXED_PARAMS,
             min_days=120,
-            slippage_bps=sc["slippage_bps"],
+            slippage_bps=0.0,
             commission_rate=sc["commission_rate"],
+            slippage_bps_map=slippage_map,
         )
         records = result["records_df"]
         nav = records["nav"]
@@ -116,9 +158,9 @@ def main():
 
         row = {
             "场景": label,
-            "双边滑点(bp)": sc["slippage_bps"],
+            "spread倍数": f"×{mult:.1f}",
+            "avg_spread(bp)": round(avg_spread, 1),
             "佣金": f"万{sc['commission_rate']*10000:.1f}",
-            "总摩擦(bp)": sc["总摩擦(bp)"],
         }
         row.update(m)
         all_rows.append(row)
@@ -135,12 +177,12 @@ def main():
     print("  滑点与手续费对比表（纯防御，2014-2026）")
     print(f"{'=' * 70}")
 
-    print(f"{'场景':<8} {'双边滑点':>8} {'佣金':>8} {'总摩擦':>8} "
+    print(f"{'场景':<8} {'倍数':>6} {'avg价差':>8} {'佣金':>8} "
           f"{'Sharpe':>8} {'年化':>10} {'最大回撤':>10}")
     print("─" * 70)
     for r in all_rows:
-        print(f"{r['场景']:<8} {r['双边滑点(bp)']:>6}bp {r['佣金']:>8} "
-              f"{r['总摩擦(bp)']:>6}bp {r['Sharpe']:>8.2f} "
+        print(f"{r['场景']:<8} {r['spread倍数']:>6} {r['avg_spread(bp)']:>6}bp "
+              f"{r['佣金']:>8} {r['Sharpe']:>8.2f} "
               f"{r['年化']:>9.1%} {r['最大回撤']:>9.1%}")
 
     # 验收

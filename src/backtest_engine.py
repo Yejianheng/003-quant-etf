@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：新增 slippage_bps_map per-ETF 价差参数 + benchmark_6040 返回值
 # [2026-05-30] 修复：parameter_scan scalar_metrics 排除 _recorder/benchmark_* 序列，避免 CSV 字段超限
 # [2026-05-30] 修复：repo_cash 改为残差计算（现金守恒）+ 首日直接执行避免空仓期 — T+1 现金泄漏
 # [2026-05-30] 新增：execution_lag 参数（0=当日成交，1=T+1成交）— Look-Ahead Bias 验证
@@ -48,6 +49,7 @@ def get_available_etfs(
     return available
 
 
+# @claude-override-approved
 def run_backtest(
     prices: dict[str, pd.DataFrame],
     initial_capital: float = 1_000_000,
@@ -56,6 +58,7 @@ def run_backtest(
     execution_lag: int = 0,
     slippage_bps: float = 0.0,
     commission_rate: float = 0.0,
+    slippage_bps_map: dict[str, float] | None = None,
 ) -> dict:
     """运行完整回测。
 
@@ -66,6 +69,7 @@ def run_backtest(
     execution_lag: 0=信号当日成交（当前），1=T+1成交（修正 Look-Ahead Bias）。
     slippage_bps: 双边滑点（bp），买入 close*(1+s/10000)，卖出 close*(1-s/10000)。
     commission_rate: 佣金费率（如 0.00025 = 万2.5），按换手额收取。
+    slippage_bps_map: per-ETF 双边滑点（bp），优先于 slippage_bps。不传则所有 ETF 使用 slippage_bps。
 
     返回绩效指标 dict，含 records_df 和 benchmark_nav。
     """
@@ -168,12 +172,13 @@ def run_backtest(
                 price = prices[name].loc[exec_day, "close"]
                 if price <= 0:
                     continue
-                # 买卖方向 → 执行价
+                # 买卖方向 → 执行价（per-ETF 价差优先，兜底统一滑点）
+                per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
                 current_value = prev_positions.get(name, 0.0) * price
                 if target_dollar > current_value:
-                    exec_price = price * (1.0 + slippage_bps / 10000.0)
+                    exec_price = price * (1.0 + per_slippage / 10000.0)
                 else:
-                    exec_price = price * (1.0 - slippage_bps / 10000.0)
+                    exec_price = price * (1.0 - per_slippage / 10000.0)
                 positions[name] = target_dollar / exec_price
                 # 佣金按换手额
                 turnover = abs(target_dollar - current_value)
@@ -229,6 +234,7 @@ def run_backtest(
     benchmark_300 = compute_single_benchmark(prices, "沪深300")
     benchmark_chinext = compute_single_benchmark(prices, "创业板")
     benchmark_nasdaq = compute_single_benchmark(prices, "纳指")
+    benchmark_6040 = compute_benchmark(prices, {"沪深300": 0.60, "国债ETF": 0.40})
 
     return {
         "records_df": records_df,
@@ -237,6 +243,7 @@ def run_backtest(
         "benchmark_300": benchmark_300,
         "benchmark_chinext": benchmark_chinext,
         "benchmark_nasdaq": benchmark_nasdaq,
+        "benchmark_6040": benchmark_6040,
         "final_nav": final_nav,
         "final_benchmark_nav": final_benchmark_nav,
         "total_return": total_return,
@@ -296,7 +303,8 @@ def parameter_scan(
             k: v
             for k, v in bt.items()
             if k not in ("records_df", "benchmark_nav", "_recorder",
-                         "benchmark_300", "benchmark_chinext", "benchmark_nasdaq")
+                         "benchmark_300", "benchmark_chinext", "benchmark_nasdaq",
+                         "benchmark_6040")
         }
         results.append({**params, **scalar_metrics})
 
