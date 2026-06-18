@@ -1,3 +1,4 @@
+# [2026-06-18] 修改：fetch_us_data 重写 — AKShare(东方财富) + FRED 债券合成
 # [2026-06-18] 新增：美股版策略等效回测 — 跨市场验证
 """
 美股版策略等效回测：用美股资产复刻 A 股 v0.18-release 策略，
@@ -17,6 +18,7 @@ from src.backtest_engine import run_backtest
 from src.signal_generator import generate_signal
 from src.benchmark import compute_single_benchmark, compute_benchmark
 from src.recorder import get_records_df
+import pandas_datareader.data as web
 
 # v0.18-release 核心参数（原封搬运）
 US_PARAMS = {
@@ -36,79 +38,156 @@ US_STOCK_BASKET = ["SPY", "QQQ"]
 US_TICKERS = ["SPY", "QQQ", "GLD", "SHY", "IEF", "TLT", "BIL"]
 
 
-def fetch_us_data(tickers, start="2005-01-01", end="2026-06-18"):
-    """拉取美股 ETF 历史数据（AKShare → 新浪财经美股）。
+# FRED → 债券合成参数
+BOND_SYNTH_CONFIG = {
+    "SHY": {"fred_series": "DGS2",  "duration": 2.0},
+    "IEF": {"fred_series": "DGS10", "duration": 8.0},
+    "TLT": {"fred_series": "DGS30", "duration": 17.0},
+}
 
-    tickers: ETF 代码列表。
-    start/end: 日期范围（YYYY-MM-DD 格式）。
-    返回: {ticker: DataFrame[open, high, low, close, volume]}，index=DatetimeIndex。
+
+def _fetch_fred_bond(start, end):
+    """从 FRED 拉取国债收益率 → 合成 3 只债券 ETF 日线 OHLCV。
+    返回: {ticker: DataFrame[open, high, low, close, volume]}
     """
-    import time
-    import akshare as ak
+    # 拉取所有需要的 FRED 序列（一次 API 调用支持多个 series）
+    series_ids = ["DGS2", "DGS10", "DGS30", "TB3MS"]
+    raw = web.DataReader(series_ids, "fred", start, end)
+    # raw: DataFrame, columns=DGS2/DGS10/DGS30/TB3MS, index=DatetimeIndex
+    raw = raw.ffill()  # 前向填充周末/假期
 
     result = {}
-    start_int = start.replace("-", "")
-    end_int = end.replace("-", "")
 
-    for ticker in tickers:
-        for attempt in range(3):
-            try:
-                df = ak.stock_us_daily(symbol=ticker, adjust="qfq")
-                if df is not None and len(df) > 0:
-                    break
-            except Exception as e:
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-                else:
-                    print(f"  [{ticker}] 拉取失败: {e}")
-                    df = None
-
-        if df is None or len(df) == 0:
+    # 合成债券 ETF
+    for ticker, cfg in BOND_SYNTH_CONFIG.items():
+        yields = raw[cfg["fred_series"]].dropna()
+        if len(yields) < 2:
             continue
+        dur = cfg["duration"]
+        dy = yields.diff()           # Δyield (百分点)
+        carry = yields / 100 / 252   # 日 carry
+        price_ret = -dur * dy / 100  # 久期近似: ΔP/P ≈ -D × Δy
+        daily_ret = price_ret + carry
+        nav = (1 + daily_ret).cumprod()
+        nav = nav * 100 / nav.iloc[0]  # 起始价 100
 
-        # 统一处理：确保 index 为 DatetimeIndex
-        if not isinstance(df.index, pd.DatetimeIndex):
-            if "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.set_index("date")
-        # 删除可能的 date 列（AKShare 有时保留）
-        if "date" in df.columns:
-            df = df.drop(columns=["date"])
+        result[ticker] = pd.DataFrame({
+            "open":  nav * 0.999,
+            "high":  nav * 1.001,
+            "low":   nav * 0.998,
+            "close": nav,
+            "volume": np.full(len(nav), 1e6),
+        }, index=nav.index)
 
-        # 列名归一化
-        df = df.rename(columns={
-            "open": "open", "high": "high", "low": "low",
-            "close": "close", "volume": "volume",
-        })
-        cols = ["open", "high", "low", "close", "volume"]
-        available = [c for c in cols if c in df.columns]
-        df = df[available].sort_index()
-
-        # 按日期范围截断
-        mask = (df.index >= start) & (df.index <= end)
-        df = df.loc[mask]
-
-        # 过滤前复权异常负价（累积分红修正过度，多见于 2009 年）
-        if "close" in df.columns:
-            df = df[df["close"] > 0]
-
-        if len(df) > 0:
-            result[ticker] = df
-            print(f"  [{ticker}] {df.index[0].date()} ~ {df.index[-1].date()} ({len(df)} 天)")
-
-        # 频率限制：每个 ticker 间隔 2 秒
-        time.sleep(2)
-
-    # BIL 补齐：如果没有 BIL 数据，用 SPY 日期 index 生成年化 4% 合成现金曲线
-    if "BIL" not in result and "SPY" in result:
-        spy_idx = result["SPY"].index
-        bil_close = 100 * np.exp(np.cumsum(np.full(len(spy_idx), 0.04 / 252)))
+    # 合成 BIL（T-Bill，纯 carry）
+    tbill = raw["TB3MS"].dropna()
+    if len(tbill) > 1:
+        daily_ret = (tbill / 100) / 252
+        nav = (1 + daily_ret).cumprod()
+        nav = nav * 100 / nav.iloc[0]
         result["BIL"] = pd.DataFrame({
-            "open": bil_close, "high": bil_close,
-            "low": bil_close, "close": bil_close,
-            "volume": np.zeros(len(spy_idx)),
-        }, index=spy_idx)
-        print(f"  [BIL] 合成现金曲线 ({len(spy_idx)} 天, 年化 4%)")
+            "open":  nav * 0.999,
+            "high":  nav * 1.001,
+            "low":   nav * 0.998,
+            "close": nav,
+            "volume": np.full(len(nav), 1e6),
+        }, index=nav.index)
+
+    return result
+
+
+def _fetch_akshare_etf(ticker, start, end):
+    """从 AKShare 东方财富后端拉单只美股 ETF 日线。"""
+    import akshare as ak
+    import time
+
+    for attempt in range(3):
+        try:
+            df = ak.stock_us_hist(
+                symbol=ticker,
+                period="daily",
+                start_date=start.replace("-", ""),
+                end_date=end.replace("-", ""),
+                adjust="qfq",
+            )
+            if df is not None and len(df) > 0:
+                break
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            else:
+                raise RuntimeError(f"{ticker} 拉取失败: {e}")
+
+    # 列名归一化（东方财富返回中文列名）
+    df = df.rename(columns={
+        "日期": "date", "开盘": "open", "最高": "high",
+        "最低": "low", "收盘": "close", "成交量": "volume",
+    })
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    df = df[[c for c in cols if c in df.columns]]
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
+    return df
+
+
+def _fetch_gold_fred(start, end):
+    """FRED 伦敦金价 → 伪 GLD ETF 日线（2004 年前填充用）。"""
+    gold = web.DataReader("GOLDAMGBD228NLBR", "fred", start, end)
+    gold = gold.ffill().dropna()
+    gold.columns = ["close"]
+    nav = gold["close"]
+    return pd.DataFrame({
+        "open":  nav * 0.999,
+        "high":  nav * 1.005,
+        "low":   nav * 0.995,
+        "close": nav,
+        "volume": np.full(len(nav), 1e6),
+    }, index=nav.index)
+
+
+def fetch_us_data(tickers, start="1996-01-01", end="2026-06-18"):
+    """拉取美股 ETF 历史数据（AKShare + FRED 混合）。
+
+    - SPY/QQQ/GLD: AKShare 东方财富（真实 ETF）
+    - SHY/IEF/TLT/BIL: FRED 国债收益率合成
+    - GLD 2004 年前缺口: FRED 伦敦金价填充
+    """
+    result = {}
+
+    # 1. AKShare 拉取股票 ETF
+    for ticker in ["SPY", "QQQ", "GLD"]:
+        if ticker not in tickers:
+            continue
+        try:
+            df = _fetch_akshare_etf(ticker, start, end)
+            if len(df) > 0:
+                result[ticker] = df
+        except Exception as e:
+            print(f"  [{ticker}] AKShare 失败: {e}")
+
+    # 2. GLD 2004 年前缺口 → FRED 金价填充
+    if "GLD" in result:
+        gld_start = result["GLD"].index[0]
+        if gld_start > pd.Timestamp("2004-12-01"):
+            try:
+                gold_fred = _fetch_gold_fred(start, str(gld_start.date()))
+                # 拼接: FRED 金价 + GLD ETF
+                gold_fred_close = gold_fred["close"]
+                # 对齐单位：GLD 起点 ~44，FRED 金价 ~400，等比缩放
+                ratio = result["GLD"]["close"].iloc[0] / gold_fred_close.iloc[-1]
+                gold_fred_scaled = gold_fred * ratio
+                result["GLD"] = pd.concat([gold_fred_scaled, result["GLD"]]).sort_index()
+            except Exception:
+                pass  # FRED 失败不阻塞
+
+    # 3. FRED 债券合成
+    try:
+        bonds = _fetch_fred_bond(start, end)
+        for ticker in ["SHY", "IEF", "TLT", "BIL"]:
+            if ticker in bonds and ticker in tickers:
+                result[ticker] = bonds[ticker]
+    except Exception as e:
+        print(f"  FRED 债券合成失败: {e}")
 
     return result
 
@@ -315,7 +394,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="美股版策略等效回测")
-    parser.add_argument("--start", default="2005-01-01")
+    parser.add_argument("--start", default="1996-01-01")
     parser.add_argument("--end", default="2026-06-18")
     parser.add_argument("--output", default="output")
     args = parser.parse_args()
