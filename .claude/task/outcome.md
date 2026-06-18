@@ -2,55 +2,54 @@
 
 > 执行时间：2026-06-18 | 方向来源：.claude/task/direction.md
 
-## 任务：系统审计文件入必读 + 封存发布
+## 任务：过期文件归档 + 必读内容调整
 
-### 步骤 1：CLAUDE.md 增加必读引用 ✅
-
-CLAUDE.md 第 3 行已修改，`attribution/system_audit.md` 加入新窗口必读列表：
+### 步骤 1：建 archive 目录并移入过期文件 ✅
 
 ```
-> **AI 核心指令**：任何新会话启动时，必须优先完整阅读本文件、
-  `方向性讨论.md`、`attribution/system_audit.md` 及 `.claude/rules/`
-  下所有规则文件（按编号顺序加载）。本文件拥有最高解释权。
+archive/
+├── 设计文档/
+│   ├── 方向性讨论.md
+│   └── 进攻层失效分析.md
+├── 测试报告/
+│   ├── 测试报告.md
+│   ├── strateg_漏洞验证_20260612.md
+│   └── 新增测试方案.txt
+└── 审计记录/
+    ├── 全量审计-prompt.md
+    └── 公式验证报告.md
 ```
 
-审计流程：validate 通过 → audit 通过（Qwen3-Max 盲审）。
+`跨模型审计/` 已删除。7 个文件全部 `git mv` 保留历史。
 
-### 步骤 2：打 release tag ✅
+### 步骤 2：CLAUDE.md 移除方向性讨论引用 ✅
+
+AI 核心指令简化为：
+```
+必须优先完整阅读本文件、`attribution/system_audit.md` 及 `.claude/rules/`
+```
+
+### 步骤 3：10-context.md 加载分层图同步 ✅
+
+新增 `attribution/system_audit.md`（始终加载）和 `archive/`（按需加载）。
+
+### 步骤 4：.claudeignore ✅
+
+`archive/` 不在 ignore 列表中，被 git 正常追踪。
+
+### 步骤 5：提交 ✅
 
 ```
-git tag -a v0.15-release HEAD
+8ee264e v190-20260618-22: 归档 — 过期文件移至 archive/，必读简化为 system_audit + rules
 ```
-
-Tag 已创建，含完整版本说明（策略配置、绩效、交付物、封存说明）。
-
-现有 tag：`v0.08-canonical` + `v0.15-release`。
-
-### 步骤 3：推送 ✅
-
-- `master` → `b7ac512` 已推送
-- `v0.15-release` tag 已推送
 
 ### 验收核对
 
-- [x] CLAUDE.md 含 `attribution/system_audit.md` 引用
-- [x] `v0.15-release` tag 存在且已推送
-- [x] master 已推送
-- [x] `git tag -l` 可见 `v0.08-canonical` + `v0.15-release`
-- [x] 工作区干净
-
-### 提交记录
-
-| Commit | 描述 |
-|------|------|
-| `b7ac512` v190-20260618-21 | 宏观分解 + system_audit 入必读 |
-
-### 涉及文件
-
-| 文件 | 操作 |
-|------|------|
-| `CLAUDE.md` | 修改：AI 核心指令增加 `attribution/system_audit.md` |
-| git tag `v0.15-release` | 新增 tag，标记 0.15 生产封闭版本 |
+- [x] `archive/` 含三个子目录 + 7 个文件
+- [x] CLAUDE.md 必读引用仅含 `system_audit.md`
+- [x] 10-context.md 加载图与 CLAUDE.md 一致
+- [x] `跨模型审计/` 已删除
+- [x] 工作区干净（ahead of origin/master by 1 commit）
 
 ---
 
