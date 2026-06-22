@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.data_pipeline import fetch_etf_daily, load_from_parquet, save_to_parquet, trim_isolated_dates
 from src.etf_universe import ETF_UNIVERSE
+from scripts.verify_data import verify_data
 
 
 def update_single_etf(code: str, data_dir: str = "data", lookback_days: int = 10) -> bool:
@@ -63,6 +64,14 @@ def main(data_dir: str = "data", lookback_days: int = 10) -> None:
     trimmed = trim_isolated_dates(codes, data_dir)
     if trimmed > 0:
         print(f"已剔除 {trimmed} 行孤立日期")
+
+    warnings = verify_data(data_dir)
+    if warnings:
+        print(f"\n[校验] {len(warnings)} 条告警：")
+        for m in warnings:
+            print(f"  {m}")
+    else:
+        print("[校验] 全部通过")
 
 
 if __name__ == "__main__":
