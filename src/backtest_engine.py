@@ -228,7 +228,7 @@ def run_backtest(
                       for name in positions
                       if name in prices and exec_day in prices[name].index}
         record_daily(
-            recorder, str(today.date()), nav, signal, alloc["positions"],
+            recorder, str(today.date()), nav, signal, exec_alloc["positions"],
             positions_detail=pos_detail,
         )
 
