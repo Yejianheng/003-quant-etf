@@ -281,11 +281,15 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
         active_str = signal_row.get("defense_active", "")
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
         n_active = len(active)
+
+        repo_amount_val = float(row.get("repo_amount", 0.0))
+        nav_val = float(row["nav"]) if float(row["nav"]) != 0 else 1.0
+        repo_pct = repo_amount_val / nav_val
+        actual_alloc = max(0.0, 1.0 - repo_pct)
+
         weights = {}
         for name in etf_names:
-            weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
-
-        total_weight = sum(weights.values())
+            weights[name] = actual_alloc / n_active if name in active and n_active > 0 else 0.0
 
         # --- 操作列 = 明日将执行的调仓（当日信号 vs 前日信号） ---
         # new_weights = 当日信号等权（明日将持）；old_weights = 前日信号等权（今日实际持）
@@ -314,8 +318,8 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
             "ew_nav": ew_val,
             "nav_6040": v6040_val,
             "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
-            "cash": round(1.0 - total_weight, 4),
-            "repo_amount": round(repo_amount / float(row["nav"]), 4) if float(row["nav"]) != 0 else 0.0,
+            "cash": round(repo_pct, 4),
+            "repo_amount": round(repo_pct, 4),
             "is_repo_day": is_repo_day,
             "action": action,
             "delta": delta_nav,
