@@ -1,3 +1,4 @@
+# [2026-06-22] 修复：T+1 模式 record_daily 传入 exec_alloc["positions"]
 # [2026-06-18] 修改：参数化 repo_rate/defense_names/benchmark_specs，支持跨市场回测 @claude-override-approved
 # [2026-06-18] 修改：新增 slippage_bps_map per-ETF 价差参数 + benchmark_6040 返回值
 # [2026-05-30] 修复：parameter_scan scalar_metrics 排除 _recorder/benchmark_* 序列，避免 CSV 字段超限

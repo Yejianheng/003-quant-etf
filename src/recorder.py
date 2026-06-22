@@ -1,3 +1,4 @@
+# [2026-06-22] 修复：exposure/repo_amount 优先从 positions_detail 计算
 # [2026-05-30] 修改：record_daily 新增 positions_detail 可选参数 — Golden Dataset
 # [2026-05-30] 修改：日记录新增 scaling_factor / predicted_vol — Vol Target 触发审计
 # [2026-05-27] 新增：Recorder — 回测日记录器，记录每天组合状态和信号
