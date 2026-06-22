@@ -146,6 +146,21 @@ pytest tests/ -v
 
 ## 版本
 
+## v194 — 数据校验脚本 + 管线巡检通过（2026-06-22）
+
+- `scripts/verify_data.py` — 新鲜度/行数一致性/空值三类检查，集成到 `update_data.py` 末尾
+- 5 只防御 ETF 全部 3130 行、2013-07-31 ~ 最新、零 NaN、零偏差
+
+## v193 — 图表现金列二元逻辑修复（2026-06-22）
+
+- 权重列还原 1/N 等权（信号层），现金列仅空仓显示 100%（熔断/无品种），其余显示"—"
+- 信号层与执行层隔离展示，不再将波动率缩放后的 repo_pct 混入权重列
+
+## v192 — recorder/backtest T+1 窗口修复（2026-06-22）
+
+- `recorder.py` exposure 优先从 positions_detail 计算
+- `backtest_engine.py` T+1 模式传 `exec_alloc` 至 record_daily，repo_amount 反映实际持仓
+
 ## v190 — T+1 可执行基准 + 参数切换（2026-06-18）
 
 ### target_vol_beta 0.15→0.18

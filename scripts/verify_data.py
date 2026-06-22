@@ -9,6 +9,8 @@ from datetime import date
 
 import pandas as pd
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from src.etf_universe import ETF_UNIVERSE
 from src.data_pipeline import load_from_parquet
 
