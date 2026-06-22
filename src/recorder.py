@@ -19,7 +19,10 @@ def record_daily(
     positions_detail: dict[str, float] | None = None,
 ) -> None:
     """追加一条日记录到 recorder["records"]（in-place 修改）。"""
-    exposure = sum(positions.values())
+    if positions_detail:
+        exposure = sum(positions_detail.values())
+    else:
+        exposure = sum(positions.values())
     repo_amount = nav - exposure
 
     offense_top = [item["name"] for item in signal["offense"]["rankings"]]
