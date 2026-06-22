@@ -81,3 +81,37 @@ class TestEmptyRecorder:
 
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 0, f"空 recorder 应返回空 DataFrame，实际 {len(df)} 行"
+
+
+class TestPositionsDetail:
+    """positions_detail 优先用于 exposure / repo_amount 计算"""
+
+    def test_repo_amount_from_positions_detail(self):
+        """positions_detail != positions 时，repo_amount 应基于 positions_detail"""
+        rec = init_recorder()
+        signal = _make_signal(defense_active=["沪深300", "创业板", "纳指", "黄金"])
+        # positions 来自当日 signal（满仓）→ exposure=1,000,000
+        positions = {"沪深300": 250_000, "创业板": 250_000, "纳指": 250_000, "黄金": 250_000}
+        # positions_detail 来自昨日执行（0.92 乘数）→ exposure=920,000
+        detail = {"沪深300": 230_000, "创业板": 230_000, "纳指": 230_000, "黄金": 230_000}
+        record_daily(rec, "2024-06-15", 1_000_000, signal, positions, positions_detail=detail)
+        df = get_records_df(rec)
+        row = df.iloc[0]
+        assert row["exposure"] == pytest.approx(920_000, rel=1e-6), (
+            f"exposure 应基于 positions_detail=920,000，实际 {row['exposure']}"
+        )
+        assert row["repo_amount"] == pytest.approx(80_000, rel=1e-6), (
+            f"repo_amount 应为 1,000,000-920,000=80,000，实际 {row['repo_amount']}"
+        )
+        assert row["n_positions"] == 4
+
+    def test_no_positions_detail_falls_back_to_positions(self):
+        """无 positions_detail 时，exposure 应 fallback 到 positions"""
+        rec = init_recorder()
+        signal = _make_signal(defense_active=["沪深300", "国债ETF"])
+        positions = {"沪深300": 600_000, "国债ETF": 300_000}
+        record_daily(rec, "2024-06-15", 1_000_000, signal, positions)
+        df = get_records_df(rec)
+        row = df.iloc[0]
+        assert row["exposure"] == pytest.approx(900_000, rel=1e-6)
+        assert row["repo_amount"] == pytest.approx(100_000, rel=1e-6)
