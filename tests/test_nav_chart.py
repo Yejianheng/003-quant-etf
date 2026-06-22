@@ -217,8 +217,8 @@ class TestNavChart:
         assert "累计交易成本" in html, "HTML 应包含 累计交易成本"
         assert "成本占比" in html, "HTML 应包含 成本占比"
 
-    def test_weights_plus_cash_equals_100_percent(self, tmp_path):
-        """每行数据权重合计 + 现金 = 100%"""
+    def test_cash_column_binary_logic(self, tmp_path):
+        """现金列：空仓(CB或无品种)=100%，有持仓=0（前端渲染为—）"""
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
@@ -229,15 +229,18 @@ class TestNavChart:
             main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
-        # 提取 tableData JSON
         match = re.search(r'const tableData = (\[.*?\]);\s*const PAGE_SIZE', html, re.DOTALL)
         assert match, "HTML 中应包含 tableData JSON"
         table_data = json.loads(match.group(1))
         assert len(table_data) > 0, "tableData 不应为空"
         for row in table_data:
             weights_sum = sum(row["weights"])
-            cash = row.get("cash", 0.0)
-            total = weights_sum + cash
-            assert abs(total - 1.0) < 0.01, (
-                f"{row['date']}: 权重合计={weights_sum:.4f} + 现金={cash:.4f} = {total:.4f}，应 = 1.0"
-            )
+            repo = row.get("repo_amount", 0.0)
+            if weights_sum == 0:
+                assert repo == 1.0, (
+                    f"{row['date']}: 空仓应 repo_amount=1.0，实际 {repo}"
+                )
+            else:
+                assert repo == 0.0, (
+                    f"{row['date']}: 有持仓应 repo_amount=0.0（前端渲染为—），实际 {repo}"
+                )
