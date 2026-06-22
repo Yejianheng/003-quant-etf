@@ -1,4 +1,4 @@
-# [2026-06-22] 修复：权重列展示实际仓位（乘数后），权重+现金恒等 100%
+# [2026-06-22] 修复：权重还原纯等权，现金列二元判断（空仓=100%，持仓=0）
 # [2026-06-18] 修改：新增等权基准 + 60/40 基准线（图表 + 表格列）
 # [2026-06-18] 修改：新增逆回购可视化（背景带 + 净值虚线 + 表格统计行）
 # [2026-06-16] 修改：去 A/B 参考线，只保留 50/50 生产策略 + 5 ETF 基准
@@ -277,20 +277,24 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
         date_str = str(_idx.date()) if hasattr(_idx, "date") else str(_idx)[:10]
         date_ts = _idx if isinstance(_idx, pd.Timestamp) else pd.Timestamp(_idx)
 
-        # --- 持仓权重 = 今日实际持股（昨日 signal → 今日执行） ---
+        # --- 持仓权重 = 前日信号层等权分配（信号与执行隔离展示） ---
         signal_row = records_df.iloc[i - 1]
+        cb_triggered_prev = bool(signal_row.get("circuit_breaker_triggered", False))
+        defense_count_prev = int(signal_row.get("defense_count", 0))
+        is_all_cash = cb_triggered_prev or defense_count_prev == 0
+
         active_str = signal_row.get("defense_active", "")
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
         n_active = len(active)
 
-        repo_amount_val = float(row.get("repo_amount", 0.0))
-        nav_val = float(row["nav"]) if float(row["nav"]) != 0 else 1.0
-        repo_pct = repo_amount_val / nav_val
-        actual_alloc = max(0.0, 1.0 - repo_pct)
-
         weights = {}
         for name in etf_names:
-            weights[name] = actual_alloc / n_active if name in active and n_active > 0 else 0.0
+            if is_all_cash:
+                weights[name] = 0.0
+            else:
+                weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
+
+        total_weight = sum(weights.values())
 
         # --- 操作列 = 明日将执行的调仓（当日信号 vs 前日信号） ---
         # new_weights = 当日信号等权（明日将持）；old_weights = 前日信号等权（今日实际持）
@@ -319,8 +323,8 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
             "ew_nav": ew_val,
             "nav_6040": v6040_val,
             "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
-            "cash": round(repo_pct, 4),
-            "repo_amount": round(repo_pct, 4),
+            "cash": round(1.0 - total_weight, 4),
+            "repo_amount": 1.0 if is_all_cash else 0.0,
             "is_repo_day": is_repo_day,
             "action": action,
             "delta": delta_nav,
