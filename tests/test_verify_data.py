@@ -70,7 +70,7 @@ class TestStaleWarning:
 
         # 4 只新鲜，截止今天
         fresh_end = today
-        stale_end = today - pd.DateOffset(days=4)
+        stale_end = today - pd.DateOffset(days=10)
 
         names = list(DEFENSE_NAMES)
         for name in names[:4]:
