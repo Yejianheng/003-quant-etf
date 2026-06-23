@@ -46,13 +46,17 @@ class TestUpdateData:
 
         # 模拟 AKShare 返回最近 10 天新数据
         new_df = _make_ohlcv_df("2024-06-17", days=10)
+        mock_fetch_tx = MagicMock(return_value=pd.DataFrame())
         mock_fetch = MagicMock(return_value=new_df)
 
         from scripts.update_data import update_single_etf
-        with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
-            updated = update_single_etf("510300", data_dir, lookback_days=10)
+        with patch("scripts.update_data.fetch_etf_daily_tx", mock_fetch_tx):
+            with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
+                updated = update_single_etf("510300", data_dir, lookback_days=10)
 
         assert updated is True
+        mock_fetch_tx.assert_called_once()
+        mock_fetch.assert_called_once()
         result = pd.read_parquet(old_path)
         assert len(result) > 120, f"应增加行数，实际 {len(result)}"
         assert result.index.is_unique, "日期不应重复"
@@ -79,12 +83,16 @@ class TestUpdateData:
         old_path = os.path.join(data_dir, "510300.parquet")
         old_df.to_parquet(old_path)
 
+        mock_fetch_tx = MagicMock(return_value=pd.DataFrame())
         mock_fetch = MagicMock(return_value=pd.DataFrame())
         from scripts.update_data import update_single_etf
-        with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
-            updated = update_single_etf("510300", data_dir, lookback_days=10)
+        with patch("scripts.update_data.fetch_etf_daily_tx", mock_fetch_tx):
+            with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
+                updated = update_single_etf("510300", data_dir, lookback_days=10)
 
         assert updated is False
+        mock_fetch_tx.assert_called_once()
+        mock_fetch.assert_called_once()
         # 原文件未被破坏
         result = pd.read_parquet(old_path)
         assert len(result) == 120, f"原文件应保持 120 行，实际 {len(result)}"
@@ -115,8 +123,9 @@ class TestUpdateData:
         # 固定 "today" 为 2026-06-18，old_data last_date=6/17, start=6/18, end=6/18
         with patch("scripts.update_data.date") as mock_date:
             mock_date.today.return_value = date(2026, 6, 18)
-            with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
-                updated = update_single_etf("510300", data_dir)
+            with patch("scripts.update_data.fetch_etf_daily_tx", MagicMock(return_value=pd.DataFrame())):
+                with patch("scripts.update_data.fetch_etf_daily", mock_fetch):
+                    updated = update_single_etf("510300", data_dir)
 
         assert updated is True, "单日增量应触发拉取，不应跳过"
         mock_fetch.assert_called_once()

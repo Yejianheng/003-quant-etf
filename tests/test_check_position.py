@@ -47,9 +47,11 @@ class TestCheckPosition:
         mock_update = MagicMock()
         from scripts import check_position
         with (
+            patch("scripts.check_position.check_freshness", return_value=[]),
             patch("scripts.check_position.update_single_etf", mock_update),
             patch("scripts.check_position.DATA_DIR", data_dir),
             patch("scripts.check_position.OUTPUT_PATH", output_path),
+            patch("scripts.nav_chart.check_freshness", return_value=[]),
             patch("scripts.nav_chart.update_single_etf", mock_update),
         ):
             check_position.main()
@@ -70,9 +72,11 @@ class TestCheckPosition:
         mock_update = MagicMock()
         from scripts import check_position
         with (
+            patch("scripts.check_position.check_freshness", return_value=[]),
             patch("scripts.check_position.update_single_etf", mock_update),
             patch("scripts.check_position.DATA_DIR", data_dir),
             patch("scripts.check_position.OUTPUT_PATH", output_path),
+            patch("scripts.nav_chart.check_freshness", return_value=[]),
             patch("scripts.nav_chart.update_single_etf", mock_update),
         ):
             check_position.main()
@@ -91,9 +95,11 @@ class TestCheckPosition:
         mock_update_nav = MagicMock()
         from scripts import check_position
         with (
+            patch("scripts.check_position.check_freshness", return_value=[]),
             patch("scripts.check_position.update_single_etf", mock_update_check),
             patch("scripts.check_position.DATA_DIR", data_dir),
             patch("scripts.check_position.OUTPUT_PATH", output_path),
+            patch("scripts.nav_chart.check_freshness", return_value=[]),
             patch("scripts.nav_chart.update_single_etf", mock_update_nav),
         ):
             check_position.main()
@@ -113,9 +119,11 @@ class TestCheckPosition:
         mock_update_nav = MagicMock()
         from scripts import check_position
         with (
+            patch("scripts.check_position.check_freshness", return_value=[]),
             patch("scripts.check_position.update_single_etf", mock_update_check),
             patch("scripts.check_position.DATA_DIR", data_dir),
             patch("scripts.check_position.OUTPUT_PATH", output_path),
+            patch("scripts.nav_chart.check_freshness", return_value=[]),
             patch("scripts.nav_chart.update_single_etf", mock_update_nav),
         ):
             check_position.main()

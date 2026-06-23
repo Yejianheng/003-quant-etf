@@ -56,8 +56,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         assert os.path.exists(output_path), f"HTML 未生成: {output_path}"
 
@@ -101,8 +102,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         # 提取 Chart.js labels 中的第一个日期
@@ -141,8 +143,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         # 新表头：10 列
@@ -167,8 +170,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         # 逆回购净值 dataset
@@ -188,8 +192,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         # 等权基准 dataset
@@ -209,8 +214,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         assert "年化换手率" in html, "HTML 应包含 年化换手率"
@@ -225,8 +231,9 @@ class TestNavChart:
         mock_update = MagicMock()
 
         from scripts.nav_chart import main
-        with patch("scripts.nav_chart.update_single_etf", mock_update):
-            main(data_dir=data_dir, output_path=output_path)
+        with patch("scripts.nav_chart.check_freshness", return_value=[]):
+            with patch("scripts.nav_chart.update_single_etf", mock_update):
+                main(data_dir=data_dir, output_path=output_path)
 
         html = open(output_path, encoding="utf-8").read()
         match = re.search(r'const tableData = (\[.*?\]);\s*const PAGE_SIZE', html, re.DOTALL)
