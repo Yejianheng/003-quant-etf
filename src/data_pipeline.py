@@ -1,3 +1,4 @@
+# [2026-06-23] 新增：fetch_etf_daily_tx 腾讯财经主源 + check_freshness 新鲜度门禁
 # [2026-06-18] 新增：trim_isolated_dates — 剔除跨 ETF 不一致的孤立交易日
 # [2026-06-16] 修改：fetch_etf_daily 新增新浪 fallback（东方财富不可达时自动切换）
 # [2026-06-12] 新增：拆分/除权自动检测与修正（跌幅>50%触发，前复权）
