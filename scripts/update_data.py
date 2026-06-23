@@ -8,13 +8,14 @@
 """
 import os
 import sys
+import time
 from datetime import date, timedelta
 
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data_pipeline import fetch_etf_daily, load_from_parquet, save_to_parquet, trim_isolated_dates
+from src.data_pipeline import fetch_etf_daily, fetch_etf_daily_tx, load_from_parquet, save_to_parquet, trim_isolated_dates
 from src.etf_universe import ETF_UNIVERSE
 from scripts.verify_data import verify_data
 
@@ -39,10 +40,19 @@ def update_single_etf(code: str, data_dir: str = "data", lookback_days: int = 10
         print(f"  [{code}] 已是最新（{last_date}）")
         return False
 
-    new_data = fetch_etf_daily(code, start_date, end_date)
+    # 腾讯财经 > 东方财富 > 新浪
+    time.sleep(3)  # 腾讯限流兜底
+    new_data = fetch_etf_daily_tx(code, start_date, end_date)
     if new_data.empty:
-        print(f"  [{code}] 无新数据（{start_date}~{end_date}）")
-        return False
+        print(f"  [{code}] 腾讯财经无新数据，尝试东方财富...")
+        new_data = fetch_etf_daily(code, start_date, end_date)
+        if new_data.empty:
+            print(f"  [{code}] 无新数据（{start_date}~{end_date}）")
+            return False
+        else:
+            print(f"  [{code}] 东方财富返回 {len(new_data)} 行")
+    else:
+        print(f"  [{code}] 腾讯财经返回 {len(new_data)} 行")
 
     combined = pd.concat([existing, new_data])
     combined = combined[~combined.index.duplicated(keep="last")]

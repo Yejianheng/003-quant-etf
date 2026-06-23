@@ -7,6 +7,8 @@
 
 import os
 import time
+from datetime import date
+
 import pandas as pd
 import akshare as ak
 from src.logging_config import get_logger
@@ -38,6 +40,73 @@ def _to_sina_symbol(code: str) -> str:
     if code.startswith(("0", "1", "2")):
         return f"sz{code}"
     return f"sh{code}"
+
+
+def fetch_etf_daily_tx(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """从腾讯财经（AKShare stock_zh_a_hist_tx）拉取单只 ETF 日线。
+    腾讯数据作为主源，返回与 fetch_etf_daily 一致的 DataFrame（cols: open/high/low/close/volume, date index）。
+    code: ETF 代码，如 "510300"。限流：调用方需保证 3s 间隔。
+    """
+    # 5xxxxx = 上海, 1xxxxx/0xxxxx = 深圳
+    if code.startswith(("0", "1", "2")):
+        tx_symbol = f"sz{code}"
+    else:
+        tx_symbol = f"sh{code}"
+
+    try:
+        df = ak.stock_zh_a_hist_tx(
+            symbol=tx_symbol,
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+            adjust="qfq",
+        )
+    except Exception as e:
+        logger.warning(f"腾讯财经调用失败 (code={code}): {type(e).__name__}: {e}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # 列映射：腾讯列名 → 统一列名。amount 为成交量（手），×100 转换为股
+    df = df.rename(columns={
+        "date": "date", "open": "open", "high": "high",
+        "low": "low", "close": "close", "amount": "volume",
+    })
+
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    available = [c for c in cols if c in df.columns]
+    df = df[available]
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")
+    df = df.sort_index()
+
+    # amount（手）×100 → volume（股）
+    df["volume"] = df["volume"] * 100
+
+    # 截取日期范围
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    df = df.loc[start_ts:end_ts]
+
+    # 拆分/除权检测：同 fetch_etf_daily
+    close = df["close"]
+    daily_ret = close.pct_change()
+    split_mask = daily_ret < -0.50
+    if split_mask.any():
+        for split_date in daily_ret[split_mask].index:
+            pre = close.loc[:split_date].iloc[-2]
+            post = close.loc[split_date]
+            ratio = pre / post
+            logger.warning(
+                f"检测到拆分 (code={code}, date={str(split_date)[:10]}): "
+                f"拆前 close={pre:.3f}, 拆后 close={post:.3f}, "
+                f"比例 1:{ratio:.2f}，自动前复权修正"
+            )
+            pre_mask = df.index < split_date
+            for col in ["open", "high", "low", "close"]:
+                df.loc[pre_mask, col] = df.loc[pre_mask, col] / ratio
+
+    return df
 
 
 def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:

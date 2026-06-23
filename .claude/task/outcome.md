@@ -1,39 +1,39 @@
 # 执行结果
 
-> 执行者：Claude | 2026-06-22 | 管线巡检
+> 2026-06-23 | 数据源加固 — 腾讯财经入主源 + 图表新鲜度门禁
 
-## 命令 1 — verify_data
+## 步骤 1 — 数据管线：腾讯财经入主源 ✅
 
-```
-python scripts/verify_data.py
+**修改文件**：
+- `src/data_pipeline.py` — 新增 `fetch_etf_daily_tx` 函数，使用 `ak.stock_zh_a_hist_tx`。列映射 `amount→volume（×100）`，含拆分检测。
+- `scripts/update_data.py` — 导入 `fetch_etf_daily_tx`，修改 `update_single_etf` 先调腾讯（3s 限流），失败则回退 `fetch_etf_daily`（东方财富 → 新浪），每步打印明确日志。
 
-[校验] 全部通过
-```
+**测试**：新增 `tests/test_data_pipeline_tx.py`（6 测）+ 更新 `tests/test_update_data.py`（3 测 mock）
 
-## 命令 2 — update_data + verify_data 集成
+## 步骤 2 — 新鲜度门禁 ✅
 
-```
-python scripts/update_data.py
+**修改文件**：
+- `src/data_pipeline.py` — 新增 `check_freshness` 函数
+- `scripts/nav_chart.py` — update 后插入门禁，未通过 raise RuntimeError
+- `scripts/check_position.py` — 数据更新后插入门禁，未通过 sys.exit(1)
 
-  [510300] 已是最新（2026-06-22）
-  [159915] 已是最新（2026-06-22）
-  [513100] 已是最新（2026-06-22）
-  [518880] 已是最新（2026-06-22）
-  [511010] 已是最新（2026-06-22）
-更新完成：0/5 只 ETF 有新数据
-[校验] 全部通过
-```
+**测试**：新增 `tests/test_freshness.py`（3 测）+ 更新存量测试 mock
 
-## 命令 3 — parquet 元信息
+## 步骤 3 — 更新图表并验证 ✅
 
-```
-沪深300 (510300): 3130 行, 2013-07-31 ~ 2026-06-22, NaN=0
-创业板 (159915): 3130 行, 2013-07-31 ~ 2026-06-22, NaN=0
-纳指 (513100): 3130 行, 2013-07-31 ~ 2026-06-22, NaN=0
-黄金 (518880): 3130 行, 2013-07-31 ~ 2026-06-22, NaN=0
-国债ETF (511010): 3130 行, 2013-07-31 ~ 2026-06-22, NaN=0
+```bash
+python scripts/nav_chart.py
+# 5 ETF 全部更新到今日 → nav_2026.html 生成成功
 ```
 
-## 结论
+159915 最新日期验证：2026-06-23（通过腾讯源获取）
 
-**管线健康。** 5 只防御 ETF 数据完整（2013-07-31 ~ 2026-06-22，零空值），最新数据已就位，无需更新。校验脚本集成运行正常。
+## 数据源优先级
+
+```
+腾讯财经 (ak.stock_zh_a_hist_tx, qfq) → 东方财富 (ak.fund_etf_hist_em, qfq, 3次重试+退避) → 新浪 (ak.fund_etf_hist_sina, qfq)
+```
+
+## 测试总览
+
+**29 测全绿**（13 新增 + 16 存量适配零回归）
