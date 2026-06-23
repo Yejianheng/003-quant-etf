@@ -65,7 +65,7 @@ ETF 多资产动量轮动量化系统。AI 辅助纪律执行和标的筛选。�
 
 ## 测试状态
 
-**380 passed / 6 failed（预存外部依赖/KeyError）/ 1 skipped / 零新增回归**
+**403 passed / 6 failed（预存 golden 偏移/KeyError）/ 1 skipped / 零新增回归**
 
 两轮完整测试（旧六阶段 + 新 P0-P3）覆盖：
 - 四个模块独立贡献（Ablation T+1：趋势过滤 +0.08 > vol +0.01；CB ΔSharpe -0.03 但 DD 改善 +3.7pp）
@@ -100,6 +100,32 @@ src/
 ```
 
 以上 10 个核心引擎文件均受 `protected-files.json` Hook 保护。
+
+## 数据管线
+
+日频 ETF OHLCV 数据通过三级数据源冗余保障可用性，按优先级排列：
+
+| 优先级 | 数据源 | 接口 | 性质 | 稳定性 |
+|:--:|------|------|------|:--:|
+| **1** | **腾讯财经** | `ak.stock_zh_a_hist_tx` (qfq) | 持牌信息商，交易所官方行情分发 | **高** |
+| 2 | 东方财富 | `ak.fund_etf_hist_em` (qfq) | 网页抓取，2026 年起 WAF 频繁封禁 | 低 |
+| 3 | 新浪财经 | `ak.fund_etf_hist_sina` (qfq) | 网页抓取，数据延迟半天 | 中 |
+
+### 抓取策略
+
+```
+腾讯财经 (3s 间隔) → 失败/空 → 东方财富 (3 次重试, 2s→4s→8s 退避) → 失败/空 → 新浪 (全量→截取)
+```
+
+- **限流**：每只 ETF 请求间隔 ≥ 3 秒，由代码层 `time.sleep(3)` + Hook `pre_bash.js` 双重保障
+- **列映射**：腾讯 `amount`（成交量/手）→ `volume`（股，×100），与 em/sina 列对齐
+- **拆分修正**：三源统一走跌幅 >50% 自动前复权修正
+
+### 新鲜度门禁
+
+数据更新后校验全部 ETF `index.max().date() == today()`。任一 ETF 未更新到今日 → **硬中止**，禁止生成图表/仓位报告，明确打印未更新品种。
+
+> 2026-06-23 引入。此前 silent failure 模式（图表用旧数据"成功"生成）已被禁。
 
 ## 协作模式
 
@@ -145,6 +171,37 @@ pytest tests/ -v
 ```
 
 ## 版本
+
+## v199 — 数据源加固：腾讯财经入主源 + 新鲜度门禁（2026-06-23）
+
+### 问题
+
+东方财富 WAF 在 2026 年大幅升级反爬，连续 `ProxyError: Remote end closed connection without response`。新浪备用源存在半天级数据延迟。2026-06-23 当日创业板 (159915) 两个源同时失效，图表静默使用旧数据生成。
+
+### 方案
+
+**三级数据源冗余**（详见 [数据管线](#数据管线)）：
+
+| 优先级 | 数据源 | 接口 |
+|:--:|------|------|
+| 1 | 腾讯财经 | `ak.stock_zh_a_hist_tx` |
+| 2 | 东方财富 | `ak.fund_etf_hist_em` |
+| 3 | 新浪财经 | `ak.fund_etf_hist_sina` |
+
+**新鲜度门禁**：数据更新后校验全部 ETF 最新日期为今天，任一未达标 → `RuntimeError`/`sys.exit(1)`，禁止生成图表。
+
+### 选择腾讯财经的理由
+
+腾讯财经是证监会持牌信息商，数据来自交易所官方行情分发，不走网页爬虫。稳定性远高于东方财富/新浪的免费网页抓取。接口通过 AKShare `stock_zh_a_hist_tx` 调用（前复权），无需额外依赖。
+
+### 改动
+
+- `src/data_pipeline.py` — 新增 `fetch_etf_daily_tx` + `check_freshness`
+- `scripts/update_data.py` — 数据源优先级调整为 腾讯 > 东方财富 > 新浪
+- `scripts/nav_chart.py` + `scripts/check_position.py` — 新鲜度门禁
+- 新增测试：13 测（6 tx + 3 freshness + 3 mock 适配）
+
+全量测试 403 passed / 6 failed（4 golden 偏移 + 2 已有 KeyError，零新增回归）。
 
 ## v194 — 数据校验脚本 + 管线巡检通过（2026-06-22）
 
