@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.backtest_engine import run_backtest
 from src.signal_generator import DEFAULT_PARAMS, DEFENSE_NAMES
 from src.etf_universe import ETF_UNIVERSE
-from src.data_pipeline import load_from_parquet
+from src.data_pipeline import load_from_parquet, check_freshness
 from scripts.update_data import update_single_etf
 
 START_DATE = "2026-01-01"
@@ -794,12 +794,24 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
     """
     主流程：
     1. 更新 5 ETF parquet
-    2. 加载全量历史数据
-    3. 跑 50/50 生产策略回测
-    4. 截断到 2026-01-01 + 归一化
-    5. 生成 HTML
+    2. 新鲜度门禁
+    3. 加载全量历史数据
+    4. 跑 50/50 生产策略回测
+    5. 截断到 2026-01-01 + 归一化
+    6. 生成 HTML
     """
     update_all_etfs(data_dir)
+
+    # 新鲜度门禁：任一 ETF 未更新到今日 → 中止
+    codes = list(ETF_UNIVERSE.values())
+    stale = check_freshness(codes, data_dir)
+    if stale:
+        names = [k for k, v in ETF_UNIVERSE.items() if v in stale]
+        raise RuntimeError(
+            f"[门禁] 以下 ETF 未更新到今日：{', '.join(names or stale)}，"
+            f"图表生成已中止。请稍后重试。"
+        )
+
     prices = load_prices(data_dir)
 
     # 50/50 生产策略回测

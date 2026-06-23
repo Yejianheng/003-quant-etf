@@ -21,6 +21,7 @@ from scripts.daily_signal import (
 )
 from src.signal_generator import generate_signal, DEFAULT_PARAMS, DEFENSE_NAMES
 from src.etf_universe import ETF_UNIVERSE
+from src.data_pipeline import check_freshness
 from scripts.nav_chart import main as update_chart
 
 DATA_DIR = "data"
@@ -35,6 +36,13 @@ def main() -> None:
     codes = list(ETF_UNIVERSE.values())
     for code in codes:
         update_single_etf(code, data_dir)
+
+    # 新鲜度门禁：任一 ETF 未更新到今日 → 中止
+    stale = check_freshness(codes, data_dir)
+    if stale:
+        names = [k for k, v in ETF_UNIVERSE.items() if v in stale]
+        print(f"[门禁] 以下 ETF 未更新到今日：{', '.join(names or stale)}，仓位报告已中止。请稍后重试。", file=sys.stderr)
+        sys.exit(1)
 
     # 2. 加载数据
     prices = load_prices(data_dir)

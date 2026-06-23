@@ -256,3 +256,24 @@ def trim_isolated_dates(etf_codes: list[str], data_dir: str = "data") -> int:
     if total_removed > 0:
         logger.info(f"trim_isolated_dates: 共剔除 {total_removed} 行，交集 {len(common_dates)} 天")
     return total_removed
+
+
+def check_freshness(etf_codes: list[str], data_dir: str = "data") -> list[str]:
+    """检查所有 ETF parquet 最新日期是否为今天。
+    返回未更新到今天的 ETF 代码列表（空列表 = 全部新鲜）。
+    """
+    today = date.today()
+    stale = []
+    for code in etf_codes:
+        path = os.path.join(data_dir, f"{code}.parquet")
+        if not os.path.exists(path):
+            stale.append(code)
+            continue
+        df = load_from_parquet(path)
+        if df.empty:
+            stale.append(code)
+            continue
+        last_date = df.index.max().date()
+        if last_date != today:
+            stale.append(code)
+    return stale
