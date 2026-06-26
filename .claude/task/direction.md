@@ -1,103 +1,80 @@
 # 执行指令
 
-> 2026-06-25 | 信号间隔自动补全 — 检测空白期，逐日回放，报告准确标注变化日期
+> 2026-06-26 | 封闭版本：提交 + README 更新
 
 ## 背景
 
-今天 check_position 输出"国债ETF的趋势已转负（从上一期 6/11 的 active 池中剔除）"——这句话在 14 天空白期下是错的。真实情况：6/11~6/24 每一天国债 ETF 趋势都为正，只有 6/25 才转负。`_compare_signals` 只做首尾差集，无论中间隔了多少天、有没有变化，全部压缩成一句"从上一期剔除"。
-
-图表侧：`nav_chart.py` 走 `run_backtest` 全量回放，仓位变化天然落在正确日期，**图表不需要改**。
-
-报告侧：`check_position.py` 需要补全缺失天的信号，准确报告哪天变了什么。
+顾问侧完成全量策略回顾和测试。新增必读文件 `attribution/math-limits-and-live-params.md`（数学极限 vs 实盘参数 + 五层风险源准入流程）。项目日志已更新。需提交并更新 README。
 
 ## 操作
 
-### 步骤 1 — daily_signal.py：新增间隔回放函数
-
-**修改文件**：`scripts/daily_signal.py`
-
-新增函数 `_replay_gap(prices, state)`：
-
-```python
-def _replay_gap(prices, state):
-    """逐日回放 state.last_date 到最新数据日之间的趋势信号。
-    返回: {
-        "gap_trading_days": int,       # 间隔交易日数
-        "last_date": str,              # state 中的日期
-        "today": str,                  # 最新数据日期
-        "daily_active": [{date, active}],  # 逐日 active 集合
-        "changes": [{date, event, etf}],   # 变化事件（按时间排列）
-    }
-    """
-```
-
-回放逻辑：
-1. 从 `state["last_date"]` 次日起，到 prices 最新日期止，生成交易日列表
-2. 每个交易日：用 `close[close.index <= 该日]` 切片 → 调 `trend_strength` 算每只 ETF 趋势 → 确定 active 集合
-3. 相邻两天 active 集合对比，有变化记录 event（added/removed）
-4. 上限：最多回放 60 个交易日
-
-> 只算趋势强度即可，不需要完整六步信号——active 集合的变化仅取决于 trend_strength > 0。
-
-### 步骤 2 — check_position.py：集成回放 + 修正报告
-
-**修改文件**：`scripts/check_position.py`
-
-在 `_load_state` 之后、生成信号之前：
-1. 若有 state 且 `last_date < today` → 调用 `_replay_gap`
-2. 输出"期间回顾"段：
-
-**情况 A：间隔内无变化**
-```
-=== 2026-06-25 仓位报告 ===
-上次信号：2026-06-11（距今 10 个交易日）
-
-【期间回顾】
-  6/11 → 6/25  持续持有 4 只（沪深300、创业板、纳指、国债ETF），无变化
-```
-
-**情况 B：间隔内有变化**
-```
-=== 2026-06-25 仓位报告 ===
-上次信号：2026-06-11（距今 10 个交易日）
-
-【期间回顾】
-  6/11 → 6/16  4 只（沪深300、创业板、纳指、国债ETF），无变化
-  6/17         卖出 国债ETF（趋势转负）
-  6/17 → 6/25  3 只（沪深300、创业板、纳指），无变化
-```
-
-**操作指令**基于 `_replay_gap` 的最后一天 active vs 今天 signal active 做差集（而不是跟 14 天前的 state 做差集）。
-
-### 步骤 3 — daily_signal.py 的 format_signal_report 同步修改
-
-`format_signal_report` 增加"期间回顾"段，逻辑同上。
-
-### 步骤 4 — 保存 state
-
-`check_position.py` 和 `daily_signal.py` 运行结束后保存 state（`_save_state`），避免下次运行重复回放。
-
-### 步骤 5 — 测试
-
-新增 `tests/test_signal_gap.py`：
-
-| 测试 | 场景 |
-|------|------|
-| `test_replay_gap_no_change` | 间隔 14 天空白，趋势全程不变 → 回放确认 0 changes |
-| `test_replay_gap_one_change` | 间隔内第 5 天某 ETF 转负 → changes 含 1 条 removed 事件 |
-| `test_replay_gap_multi_change` | 间隔内先剔除再恢复 → changes 含 2 条事件 |
-| `test_replay_gap_first_run` | state=None → 跳过回放，正常输出 |
-| `test_report_output_includes_replay` | 集成测试：mock state 14 天前 → 报告含"期间回顾"段 |
-
-### 步骤 6 — 全量回归
+### 步骤 1 — 提交所有新增和修改文件
 
 ```bash
-python -m pytest tests/ --ignore=tests/test_slippage.py -q
+git add attribution/math-limits-and-live-params.md
+git add 项目日志/2026-06-26.md
+git add tests/test_sma_param_scan.py
+git add tests/test_sma_threshold_cross.py
+git add tests/test_sma_beta_stability.py
+git add tests/test_sma_slow_bear.py
+git add tests/test_trend_net_return.py
+git add tests/test_trend_smoothing.py
+git add tests/test_trend_threshold_scan.py
+git add tests/test_walk_forward_trend_window.py
+git add tests/test_crude_risk_weight.py
+git add tests/test_crude_risk_coverage.py
+git add tests/test_crude_vol_stability.py
+git add scripts/walk_forward_trend_window.py
+git commit -m "v207-20260626: 封闭 — 全量策略回顾 + 数学极限验证 + 风险源准入流程 + 必读文件"
+```
+
+### 步骤 2 — 更新 README.md
+
+在 README.md 的版本历史区域，新增 v207 章节。内容如下：
+
+---
+
+## v207 — 全量策略回顾 + 系统封闭（2026-06-26）
+
+### 策略核心公理
+
+系统定位为**不依赖 alpha 的多风险源 beta 管理系统**：通过统一风险尺度（trend_strength = 年化收益 / 年化波动率）识别有效风险源，在不同宏观状态之间动态迁移，并通过熔断机制处理所有风险源同时失效的极端情况。
+
+### 回顾结论
+
+trend_strength 的价值在跨资产归一化和已知统计分布（近似 t 分布），不在预测准确率。五种趋势确认方法中，Trend Strength 为默认，Dual MA 为已验证备选（净收益更优但均线框架在方向性讨论阶段被否决）。
+
+### 数学极限验证
+
+| 测试 | 结论 |
+|------|------|
+| **SMA 信号平滑** | 单点判断在零轴附近存在统计缺陷（sma=3 砍掉 56% whipsaw）。数学正确，但年化收益降幅超过手续费节省，实盘待定 |
+| **Walk-forward trend_window** | 固定 40 比滚动最优更稳健。追最优在 2022 年翻车（Sharpe -3.132 vs 固定 40 -0.091） |
+| **原油风险源** | 独立风险源（互补占比 51.6%），但不满足防御层波动率可控条件（P95/P5=3.27），排除 |
+| **threshold 扫描** | 效果有限，SMA 已解决问题 |
+| **含成本净收益对比** | 五方法全量对比，Breakout 年化成本 9.92% 不可接受 |
+
+### 风险源准入流程
+
+新增五层准入测试：独立性 → 极端覆盖率 → 风险收益结构 → 风险权重压力 → 生产稳定性。原油案例完成全流程验证，第三层失败直接排除。详见 `attribution/math-limits-and-live-params.md`。
+
+### 文档债务修复
+
+protected-contracts.json 和 3-core-mechanism.md 同步至实际代码参数（target_vol_beta 0.08→0.18, vol_tolerance 0.012→0.027）。
+
+### 测试状态
+
+437 passed / 6 failed（golden dataset 偏移 / 已有问题）/ 1 skipped，零新增回归。
+
+---
+
+### 步骤 3 — 推送
+
+```bash
+git push
 ```
 
 ## 约束
 
-- 不改动 `src/` 下保护区文件
-- 图表（nav_chart.py）不改——`run_backtest` 已天然回放所有日期
-- 回放上限 60 个交易日
-- 测试先行（红灯 → 绿灯）
+- README 新增内容放在版本历史区域，保持现有格式
+- 提交信息按项目规范（v207-20260626）

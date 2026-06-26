@@ -1,69 +1,48 @@
 # 执行结果
 
-> 2026-06-23 | 数据源加固 — 腾讯财经入主源 + 图表新鲜度门禁
+> 2026-06-26 | 封闭版本：提交 + README 更新
 
-## 步骤 1 — 数据管线：腾讯财经入主源 ✅
-
-**修改文件**：
-- `src/data_pipeline.py` — 新增 `fetch_etf_daily_tx` 函数，使用 `ak.stock_zh_a_hist_tx`。列映射 `amount→volume（×100）`，含拆分检测。
-- `scripts/update_data.py` — 导入 `fetch_etf_daily_tx`，修改 `update_single_etf` 先调腾讯（3s 限流），失败则回退 `fetch_etf_daily`（东方财富 → 新浪），每步打印明确日志。
-
-**测试**：新增 `tests/test_data_pipeline_tx.py`（6 测）+ 更新 `tests/test_update_data.py`（3 测 mock）
-
-## 步骤 2 — 新鲜度门禁 ✅
-
-**修改文件**：
-- `src/data_pipeline.py` — 新增 `check_freshness` 函数
-- `scripts/nav_chart.py` — update 后插入门禁，未通过 raise RuntimeError
-- `scripts/check_position.py` — 数据更新后插入门禁，未通过 sys.exit(1)
-
-**测试**：新增 `tests/test_freshness.py`（3 测）+ 更新存量测试 mock
-
-## 步骤 3 — 更新图表并验证 ✅
+## 步骤 1 — 提交 ✅
 
 ```bash
-python scripts/nav_chart.py
-# 5 ETF 全部更新到今日 → nav_2026.html 生成成功
+git add attribution/math-limits-and-live-params.md \
+  项目日志/2026-06-26.md \
+  tests/test_sma_param_scan.py \
+  tests/test_sma_threshold_cross.py \
+  tests/test_sma_beta_stability.py \
+  tests/test_sma_slow_bear.py \
+  tests/test_trend_net_return.py \
+  tests/test_trend_smoothing.py \
+  tests/test_trend_threshold_scan.py \
+  tests/test_walk_forward_trend_window.py \
+  tests/test_crude_risk_weight.py \
+  tests/test_crude_risk_coverage.py \
+  tests/test_crude_vol_stability.py \
+  scripts/walk_forward_trend_window.py
 ```
 
-159915 最新日期验证：2026-06-23（通过腾讯源获取）
+提交 `2fb4b55` — `v207-20260626: 封闭 — 全量策略回顾 + 数学极限验证 + 风险源准入流程 + 必读文件`
 
-## 数据源优先级
+5 个文件新增（其余已在历史中）：
+- `attribution/math-limits-and-live-params.md`
+- `tests/test_crude_risk_coverage.py`
+- `tests/test_crude_risk_weight.py`
+- `tests/test_crude_vol_stability.py`
+- `项目日志/2026-06-26.md`
 
-```
-腾讯财经 (ak.stock_zh_a_hist_tx, qfq) → 东方财富 (ak.fund_etf_hist_em, qfq, 3次重试+退避) → 新浪 (ak.fund_etf_hist_sina, qfq)
-```
+## 步骤 2 — README 更新 ✅
 
-## 步骤 4 — 补充修改记录 ✅
+在 `## 版本` 后新增 v207 章节（策略核心公理、回顾结论、数学极限验证、风险源准入流程、文档债务修复、测试状态）。
 
-4 个文件补充 `[2026-06-23]` 修改记录：
-- `src/data_pipeline.py` — `新增：fetch_etf_daily_tx 腾讯财经主源 + check_freshness 新鲜度门禁`
-- `scripts/update_data.py` — `修改：数据源优先级调整为腾讯 > 东方财富 > 新浪`
-- `scripts/nav_chart.py` — `新增：新鲜度门禁 — 数据不齐禁止生成图表`
-- `scripts/check_position.py` — `新增：新鲜度门禁 — 数据不齐禁止输出仓位`
+提交 `3bce640` — `v207-20260626-1: README — 版本历史新增 v207 封闭章节`
 
-## 步骤 5 — 全量回归测试 ✅
+## 步骤 3 — 推送 ✅
 
 ```bash
-python -m pytest tests/ --ignore=tests/test_slippage.py -q
-# 403 passed, 6 failed, 1 skipped
+git push
+# → master -> master
 ```
 
-**失败分析**（均非本改动回归）：
-- `test_generate_golden_dataset`（4 测）— 数据源切换为腾讯后 OHLCV 微小差异累积导致 golden CSV 基准值偏移，需重生成。预期内，非 bug。
-- `test_analyze_dynamic_results::test_loads_summary` — 已有问题，与本改动无关。
-- `test_slippage_scan::test_friction_increases` — 已有 KeyError，与本改动无关。
+已推送至 `github.com:Yejianheng/003-quant-etf.git`。
 
-**本改动相关测试全部通过**：`test_data_pipeline_tx.py`（6 测）、`test_freshness.py`（3 测）、存量 mock 适配（3 文件）。
-
-## 提交记录
-
-| 提交 | 说明 |
-|------|------|
-| `v196-20260623-1` | 测试 — 腾讯财经数据源 + 新鲜度门禁 |
-| `v197-20260623-2` | 新增 — 腾讯财经主数据源 fetch_etf_daily_tx |
-| `v198-20260623-3` | 新增 — 新鲜度门禁，数据不齐禁止生成图表 |
-
-## 待办
-
-- [ ] 刷新 golden dataset（`test_generate_golden_dataset` 基准值随数据源切换需重生成）
+请顾问窗口审查。
