@@ -2,11 +2,11 @@
 
 ## 实盘策略：50/50 A/B 组合（v186 确立）
 
-> **50% A（无 sf）+ 50% B（sf+0.08）合并为单一等效公式 `combined_mult = (dd_mult + min(sf, dd_mult)) / 2`。defense_ratio = 1.00，进攻层完全搁置。**
+> **50% A（无 sf）+ 50% B（sf+0.18）合并为单一等效公式 `combined_mult = (dd_mult + min(sf, dd_mult)) / 2`。defense_ratio = 1.00，进攻层完全搁置。**
 
 ### 为什么是组合而不是单一策略
 
-| | 纯A 无sf | 纯B sf+0.08 | **50/50 组合** |
+| | 纯A 无sf | 纯B sf+0.18 | **50/50 组合** |
 |---|---|---|---|
 | Sharpe | 1.017 | 1.205 | **1.113** |
 | 年化 | 11.72% | 8.94% | **10.35%** |
@@ -53,7 +53,7 @@ active ETF 等权分配：`weight_i = 1 / N_active`。
 
 **Step 3 — EWMA 波动率缩放（`target_volatility.py`）**
 
-计算 active ETF 池的 EWMA 协方差矩阵（λ=0.94, 窗口 252 天）→ 组合预测波动率 → `scaling_factor = 0.08 / predicted_vol`。若 `|predicted - 0.08| ≤ 0.012` 则 sf=1.0（等比容忍带 = beta×15%）。
+计算 active ETF 池的 EWMA 协方差矩阵（λ=0.94, 窗口 252 天）→ 组合预测波动率 → `scaling_factor = 0.18 / predicted_vol`。若 `|predicted - 0.18| ≤ 0.027` 则 sf=1.0（等比容忍带 = beta×15%）。
 
 > sf 仅缩仓不加仓（被 `final_multiplier = min(sf, dd_mult)` 截断）。防御层最终乘数 `combined_mult = (dd_mult + min(sf, dd_mult)) / 2`。
 
@@ -85,19 +85,19 @@ active ETF 等权分配：`weight_i = 1 / N_active`。
 ```
 trend_window = 40        # 趋势计算窗口
 ewma_lambda = 0.94       # EWMA 衰减因子 (RiskMetrics)
-target_vol_beta = 0.08   # 防御层目标波动率（v184 边际换率最优）
+target_vol_beta = 0.18   # 防御层目标波动率（T+1 重扫约束最优，边际换率 1.50）
 target_vol_alpha = 0.20  # 进攻层目标波动率（搁置中）
 defense_ratio = 1.00     # 防御资金占比（1.00=纯防御）
 corr_threshold = 0.0     # 股债相关性熔断阈值
 drawdown [0.08, 0.12, 0.18]  # 回撤三级阈值
-vol_tolerance = 0.012    # Vol Target 容忍带（= beta×15%，等比缩放）
+vol_tolerance = 0.027    # Vol Target 容忍带（= beta×15%，等比缩放）
 ```
 
 ### 策略特点总结
 
 - **A/B 组合**：等效公式 `(dd_mult + min(sf, dd_mult)) / 2`，低波动满仓(A端主导)、高波动折中(B端保护)，牛熊自动切换权重
 - **动态持仓**：不是固定 5 只等权。趋势过滤剔除弱势 ETF，可能持有 0-5 只。
-- **仓位缩放**：波动率 > 8% 时 B 端缩仓，A 端满仓，组合居于中间
+- **仓位缩放**：波动率 > 18% 时 B 端缩仓，A 端满仓，组合居于中间
 - **极端避险**：股债同涨时全部清仓进逆回购。
 - **硬回撤止损**：回撤 ≥ 18% 强制清仓。
 - **进攻层零权重**：defense_ratio=1.00 意味着进攻层完全不参与。
