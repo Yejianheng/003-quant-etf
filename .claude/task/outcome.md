@@ -45,4 +45,22 @@ git push
 
 已推送至 `github.com:Yejianheng/003-quant-etf.git`。
 
+## 步骤 4（本窗口补充）— 数据更新 + 推送补丁 ✅
+
+提交 `231e1fd` — `v207-20260626-3: 数据 — 仓位更新至 6/26 + 框架失效条件文档 + 项目日志`
+
+变更：
+- `data/*.parquet` x5 — 数据更新至 2026-06-26
+- `data/position_state.json` — 仓位状态更新，last_date 6/11→6/26，国债ETF退出active
+- `attribution/math-limits-and-live-params.md` — 新增"框架失效的数学条件"章节
+- `项目日志/2026-06-26.md` — 新增框架失效条件讨论记录
+
+推送至远端（`70b2bb0..231e1fd master -> master`）。
+
+## 最终状态
+
+- 工作区干净
+- 全部已推送至 origin/master
+- 无待处理任务
+
 请顾问窗口审查。
