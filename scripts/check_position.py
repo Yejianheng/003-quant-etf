@@ -1,3 +1,4 @@
+# [2026-06-25] 新增：间隔回放 + 期间回顾报告段
 # [2026-06-23] 新增：新鲜度门禁 — 数据不齐禁止输出仓位
 # [2026-06-11] 新增：仓位三合一脚本 — 更新数据 → 持仓报告 + 操作指令 + 更新图表
 """
@@ -19,6 +20,10 @@ from scripts.daily_signal import (
     _previous_signal_from_state,
     _build_portfolio_value,
     _compare_signals,
+    _replay_gap,
+    _format_replay_segments,
+    _save_state,
+    _signal_to_state,
 )
 from src.signal_generator import generate_signal, DEFAULT_PARAMS, DEFENSE_NAMES
 from src.etf_universe import ETF_UNIVERSE
@@ -51,17 +56,35 @@ def main() -> None:
         print("错误：data/ 目录无 parquet 文件", file=sys.stderr)
         sys.exit(1)
 
-    # 3. 构造组合净值 + 生成信号
+    # 3. 间隔回放
     state = _load_state(data_dir)
+    replay_result = _replay_gap(prices, state)
+
+    # 4. 构造组合净值 + 生成信号
     portfolio_value = _build_portfolio_value(prices, state)
     signal = generate_signal(prices, portfolio_value)
 
-    # 4. 比较上一次信号
+    # 5. 比较上一次信号（有回放则用回放最后一天对比）
     prev_signal = None
     if state:
         prev_signal = _previous_signal_from_state(state)
 
-    # 5. 输出持仓报告
+    # 有回放且期间有变化 → 操作指令基于回放最后一天 active
+    if replay_result and replay_result["changes"]:
+        last_active = None
+        if replay_result["daily_active"]:
+            last_active = replay_result["daily_active"][-1]["active"]
+        if last_active is not None:
+            prev_signal = {
+                "defense": {"active": list(last_active)},
+                "offense": {"target_weights": {}},
+                "circuit_breaker": {"triggered": False},
+            }
+
+    # 6. 保存 state（避免下次重复回放）
+    _save_state(data_dir, _signal_to_state(signal, portfolio_value))
+
+    # 7. 输出持仓报告
     today = date.today().strftime("%Y-%m-%d")
     target_weights = signal["defense"]["target_weights"]
 
@@ -80,13 +103,22 @@ def main() -> None:
     print(f"  现金        {cash_pct:.1%}")
     print()
 
+    # 期间回顾
+    if replay_result and replay_result["gap_trading_days"] > 0:
+        replay_lines = _format_replay_segments(replay_result)
+        if replay_lines:
+            print("【期间回顾】")
+            for line in replay_lines:
+                print(line)
+            print()
+
     print("【操作指令】")
     actions = _compare_signals(signal, prev_signal)
     for action in actions:
         print(f"  {action}")
     print()
 
-    # 6. 风控状态
+    # 8. 风控状态
     print("【风控状态】")
     active_count = len(signal["defense"]["active"])
     total_count = len(DEFENSE_NAMES)
@@ -104,7 +136,7 @@ def main() -> None:
     print(f"  回撤止损：{ds['level']}（{ds['drawdown']:.1%}）")
     print()
 
-    # 7. 更新图表
+    # 9. 更新图表
     update_chart(data_dir=data_dir, output_path=output_path)
     print(f"图表已更新 → {output_path}")
 
