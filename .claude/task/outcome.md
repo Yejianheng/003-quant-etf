@@ -1,76 +1,50 @@
 # 执行结果
 
-> 2026-06-26 | 封闭版本：提交 + README 更新
+> 2026-06-27 | 5分钟执行间隔测试
 
-## 步骤 1 — 提交 ✅
+## 测试文件
 
-```bash
-git add attribution/math-limits-and-live-params.md \
-  项目日志/2026-06-26.md \
-  tests/test_sma_param_scan.py \
-  tests/test_sma_threshold_cross.py \
-  tests/test_sma_beta_stability.py \
-  tests/test_sma_slow_bear.py \
-  tests/test_trend_net_return.py \
-  tests/test_trend_smoothing.py \
-  tests/test_trend_threshold_scan.py \
-  tests/test_walk_forward_trend_window.py \
-  tests/test_crude_risk_weight.py \
-  tests/test_crude_risk_coverage.py \
-  tests/test_crude_vol_stability.py \
-  scripts/walk_forward_trend_window.py
-```
+新增 `tests/test_execution_gap.py`，包含三个测试类，**不修改 `src/` 下任何文件**。
 
-提交 `2fb4b55` — `v207-20260626: 封闭 — 全量策略回顾 + 数学极限验证 + 风险源准入流程 + 必读文件`
+### 测试 A — 上限测试（开盘 vs 收盘执行）
 
-5 个文件新增（其余已在历史中）：
-- `attribution/math-limits-and-live-params.md`
-- `tests/test_crude_risk_coverage.py`
-- `tests/test_crude_risk_weight.py`
-- `tests/test_crude_vol_stability.py`
-- `项目日志/2026-06-26.md`
+从 `run_backtest(execution_lag=1)` 获取每日持仓明细，分别用 close 和 open 价格重估组合净值，对比两条年化收益率曲线。
 
-## 步骤 2 — README 更新 ✅
+**结果：通过。** 年化收益差 < 0.3pp（断言已验证）。
 
-在 `## 版本` 后新增 v207 章节（策略核心公理、回顾结论、数学极限验证、风险源准入流程、文档债务修复、测试状态）。
+### 测试 B — 5 分钟间隔 Monte Carlo
 
-提交 `3bce640` — `v207-20260626-1: README — 版本历史新增 v207 封闭章节`
+提取 2271 笔换手事件，对每笔买入按 σ_5min（= σ_intraday / √48）施加漂移，卖买跨 ETF 相关性通过 Cholesky 分解模拟，N=1000 次。
 
-## 步骤 3 — 推送 ✅
-
-```bash
-git push
-# → master -> master
-```
-
-已推送至 `github.com:Yejianheng/003-quant-etf.git`。
-
-## 步骤 4（本窗口补充）— 数据更新 + 推送补丁 ✅
-
-提交 `231e1fd` — `v207-20260626-3: 数据 — 仓位更新至 6/26 + 框架失效条件文档 + 项目日志`
-
-变更：
-- `data/*.parquet` x5 — 数据更新至 2026-06-26
-- `data/position_state.json` — 仓位状态更新，last_date 6/11→6/26，国债ETF退出active
-- `attribution/math-limits-and-live-params.md` — 新增"框架失效的数学条件"章节
-- `项目日志/2026-06-26.md` — 新增框架失效条件讨论记录
-
-推送至远端（`70b2bb0..231e1fd master -> master`）。
-
-## 最终状态
-
-- 工作区干净
-- 全部已推送至 origin/master
-- 无待处理任务
-
-## 后续补丁（2026-06-27 执行窗口）
-
-| commit | 内容 |
+**结果：**
+| 统计量 | 值 |
 |--------|------|
-| `v207-20260626-4` | 修复 — 框架失效条件章节修订（移除风险源矩阵退化论据） |
-| `v207-20260626-5` | 重构 — math-limits 全面修订（数学极限 → 模型空间鲁棒性） |
-| `v208-20260627` | 新增 — 框架核心简洁性章节 + 自我评价 + 中证500数据 |
+| 换手事件 | 2271 笔 |
+| 均值收益偏移 | 0.0016pp（方向性偏误忽略） |
+| 标准差 | 0.1187pp |
+| 95% CI | [-0.2260pp, 0.2361pp] |
 
-全部已推送至 origin/master。工作区干净。
+**结论：** 5 分钟间隔的期望收益≈0，不产生方向性损耗，与随机游走假设一致。
 
-请顾问窗口审查。
+### 测试 C — 跨风险源切换
+
+按买入/卖出 ETF 是否属于同一风险源拆分为两组，重复 MC。
+
+**结果：**
+| 分类 | 笔数 | 年化偏移 std |
+|------|------|-------------|
+| 跨风险源 | 1421 | 0.1104pp |
+| 同风险源 | 850 | 0.0551pp |
+
+跨风险源 std ≈ 2× 同风险源，符合相关性越低跟踪误差越大的预期。两组均值均 ≈ 0。
+
+### 全量回归
+
+核心 44 测试全绿。新测试 3/3 通过。预存失败（test_slippage.py import 错误、golden dataset mismatch）模式未变。
+
+## 提交
+
+```bash
+git add tests/test_execution_gap.py .claude/task/outcome.md
+git commit -m "v208-20260627-2: 新增 — 5分钟执行间隔跟踪误差测试集（A/B/C 三场景）"
+```
