@@ -1,85 +1,100 @@
 # 执行指令
 
-> 2026-06-26 | 封闭版本：提交 + README + 推送
+> 2026-06-27 | 5分钟执行间隔测试
 
-## 操作
+## 背景
 
-### 步骤 1 — 提交所有文件
+用户实盘操作：T+1 日 9:30 隔夜卖单成交 → 9:31 定时买单成交。保守场景按 5 分钟间隔估算。
 
-```bash
-git add attribution/math-limits-and-live-params.md
-git add 项目日志/2026-06-26.md
-git add tests/test_sma_param_scan.py
-git add tests/test_sma_threshold_cross.py
-git add tests/test_sma_beta_stability.py
-git add tests/test_sma_slow_bear.py
-git add tests/test_trend_net_return.py
-git add tests/test_trend_smoothing.py
-git add tests/test_trend_threshold_scan.py
-git add tests/test_walk_forward_trend_window.py
-git add tests/test_crude_risk_weight.py
-git add tests/test_crude_risk_coverage.py
-git add tests/test_crude_vol_stability.py
-git add scripts/walk_forward_trend_window.py
-git add data/159935.parquet
-git add .claude/task/outcome.md
-git commit -m "v207-20260626: 封闭 — 全量策略回顾 + 模型空间验证 + 风险源准入流程 + 必读文件"
+回测基准假设买卖同价（T+1 close）。本次测试量化 5 分钟间隔引入的跟踪误差，不修改任何源代码。
+
+## 测试设计
+
+三个测试，全部在 `tests/test_execution_gap.py`。不修改 `src/` 下任何文件。
+
+### 测试 A — 上限测试：开盘 vs 收盘执行
+
+直接调用 `run_backtest()`（现有接口，不改参数），拿到每日持仓和信号。对每次换手事件：
+- **close 执行**：用 T+1 收盘价，重新计算组合净值（验证与回测输出一致）
+- **open 执行**：买卖均改用 T+1 开盘价，重新计算组合净值
+
+对比两条净值曲线：年化收益差、Sharpe 差、回撤差。开盘和收盘的差异 = 全天最大漂移，5 分钟间隔的影响必然小于此值。
+
+数据来源：`data/*.parquet` 含 OHLC 中的 open 和 close 列。
+
+### 测试 B — 5 分钟间隔 Monte Carlo
+
+1. 拿到换手事件列表（日期、卖出 ETF、买入 ETF）
+2. 对每笔换手，卖出价 = 当日开盘价（精确）
+3. 买入价 = 当日开盘价 + 5min 漂移，漂移从历史 open-to-close 收益分布 bootstrap：
+   - 单日 σ_intraday = std(open_to_close_returns)，每只 ETF 各自计算
+   - σ_5min = σ_intraday / sqrt(48)，48 = 240分钟 / 5分钟
+   - 考虑卖买 ETF 的 daily 相关性，生成相关的随机抽样
+4. N=1000 次模拟，每次对所有换手事件独立抽样
+5. 输出：年化收益偏移分布（均值、标准差、95% CI）
+
+### 测试 C — 跨风险源切换
+
+筛选换手事件中卖出 ETF 和买入 ETF 属于不同风险源的（如权益→黄金、权益→国债）。
+重复 MC 模拟，单独统计。这类切换相关性最低，跟踪误差最大。
+
+## 步骤
+
+### 步骤 1 — 写测试文件 skeleton + 测试 A
+
+文件：`tests/test_execution_gap.py`
+
+```python
+# 测试 A: open vs close 执行
+def test_open_vs_close_execution():
+    # 1. 调用 run_backtest(execution_lag=1) 拿信号
+    # 2. 从 data/*.parquet 读 open/close 价格
+    # 3. 用 open 价重算每笔换手的成交
+    # 4. 输出两条净值曲线对比
+    # 断言: 年化收益差 < 0.3pp
 ```
 
-### 步骤 2 — 更新 README.md
+跑 → 必须红（测试文件新建，未实现）
 
-在版本历史区新增 v207。内容：
+### 步骤 2 — 实现测试 A
 
----
+实现后跑 → 必须绿。
 
-## v207 — 全量策略回顾 + 系统封闭（2026-06-26）
+### 步骤 3 — 写测试 B
 
-### 策略定位
+```python
+# 测试 B: 5分钟间隔 MC
+def test_five_minute_gap_monte_carlo():
+    # 1. 提取换手事件
+    # 2. 计算每只 ETF 的 σ_intraday
+    # 3. N=1000 MC
+    # 4. 输出分布统计
+    # 断言: 均值绝对值 < 0.05pp/年
+```
 
-**风险源状态切换系统。** 不是 ETF 轮动——资产只是插槽，框架交易的是风险源在不同宏观状态下的切换。设计公理：
+跑 → 红 → 实现 → 绿。
 
-> 不依赖 alpha 的多风险源 beta 管理系统，通过统一风险尺度（trend_strength = 年化收益 / 年化波动率）识别有效风险源，在不同宏观状态间动态迁移，熔断处理所有风险源同时失效的极端情况。
+### 步骤 4 — 写测试 C
 
-### 核心简洁性
+```python
+# 测试 C: 跨风险源切换
+def test_cross_asset_gap():
+    # 1. 筛选跨风险源换手
+    # 2. 单独 MC
+    # 3. 对比同风险源 vs 跨风险源
+```
 
-**不判断风险源生命周期，只管理风险源当前状态。** trend_strength 不是预测工具，是风险调整后的状态识别器。系统不需要知道"这个资产未来十年会不会失效"，只需要知道"今天是否值得暴露资本"。
+跑 → 红 → 实现 → 绿。
 
-### 模型空间验证
-
-| 测试 | 结论 |
-|------|------|
-| **美股跨市场（v190）** | 同一框架换 SPY/QQQ/GLD/TLT/IEF，Sharpe 0.86，策略逻辑跨市场成立 |
-| **SMA 信号噪声** | 单点判断在零轴附近存在统计缺陷（sma=3 砍掉 56% whipsaw）。数学正确，收益降幅超手续费节省，实盘待定 |
-| **原油风险源** | 独立风险源成立（互补占比 51.6%），但不满足防御层波动率可控条件（P95/P5=3.27），排除 |
-| **Walk-forward trend_window** | 固定 40 比滚动最优更稳健——追最优在 2022 年翻车（-3.132 vs -0.091） |
-| **趋势确认机制对比** | Dual MA 净收益最高（1.200 vs 1.006），均线框架在方向性讨论阶段被否决，保留为已验证备选 |
-
-### 风险源准入流程
-
-五层测试：独立性 → 极端覆盖率 → 风险收益结构 → 风险权重压力 → 生产稳定性。原油案例完成全流程验证，第三层失败直接排除。详见 `attribution/math-limits-and-live-params.md`。
-
-### 框架失效边界
-
-唯一理论失效：趋势持续时间短于观察窗口，trend_strength 信息优势消失。风险源矩阵退化不是失效条件——不同资产暴露在不同类型的不确定性上，宏观状态切换不会消失。
-
-### 架构的独特性
-
-五个学术界独立零件（TSMOM 信号、EWMA 波动率缩放、风险平价思想、凯利式不对称暴露、相关性熔断）拼成了学术界没组合过、机构（公募）做不到、零售卖不动的完整系统。真正匹配的是养老基金和主权基金——几十年时间尺度、首要目标不毁灭。
-
-### 自我评价
-
-**个人投资 10 分。** 个人投资的数学极限不是收益最大化，是毁灭概率最小化。
-
-**适合养老/捐赠/主权基金。** 不适用公募基金——季度考核和相对收益基准与框架的跟踪误差不兼容。
-
-### 测试状态
-
-437 passed / 6 failed（golden dataset 偏移 / 已有问题）/ 1 skipped，零新增回归。
-
----
-
-### 步骤 3 — 推送
+### 步骤 5 — 全量测试 + 写 outcome
 
 ```bash
-git push
+pytest tests/test_execution_gap.py -v
+pytest  # 全量确认无回归
 ```
+
+## 约束
+
+- **不修改 src/ 下任何文件**
+- 测试文件独立，只 import 现有公开接口
+- 每步提交
