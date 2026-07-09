@@ -28,11 +28,10 @@ class TestCheckFreshness:
     """check_freshness 单元测试"""
 
     def test_all_fresh_returns_empty(self, tmp_path):
-        """全部 ETF 最新日期 = today → 返回空列表"""
+        """全部 ETF 在容忍期内 → 返回空列表"""
         today = date.today()
+        # 用最近 5 个交易日，最后一天可能是今天或最近交易日
         dates = _bday_range_ending(today, 5)
-        if dates[-1].date() != today:
-            pytest.skip("今天不是交易日")
         df = _make_ohlcv_df(dates)
 
         for code in ["510300", "159915"]:
@@ -43,19 +42,18 @@ class TestCheckFreshness:
         assert stale == []
 
     def test_stale_returns_codes(self, tmp_path):
-        """部分 ETF 未更新到 today → 返回对应代码列表"""
+        """部分 ETF 超过容忍期限 → 返回对应代码列表"""
         today = date.today()
-        dates = _bday_range_ending(today, 5)
-        if dates[-1].date() != today:
-            pytest.skip("今天不是交易日")
-
-        # Fresh: last date = today
+        # Fresh: 5 business days ending on today
         fresh_dates = _bday_range_ending(today, 5)
+        if fresh_dates[-1].date() != today:
+            pytest.skip("今天不是交易日")
         fresh_df = _make_ohlcv_df(fresh_dates)
         fresh_df.to_parquet(str(tmp_path / "510300.parquet"))
 
-        # Stale: drop the last row so max date < today
-        stale_dates = fresh_dates[:-1]
+        # Stale: 5 business days ending 10 calendar days ago
+        stale_end = today - timedelta(days=10)
+        stale_dates = _bday_range_ending(stale_end, 5)
         stale_df = _make_ohlcv_df(stale_dates)
         stale_df.to_parquet(str(tmp_path / "159915.parquet"))
 

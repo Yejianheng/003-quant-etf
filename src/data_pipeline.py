@@ -259,9 +259,10 @@ def trim_isolated_dates(etf_codes: list[str], data_dir: str = "data") -> int:
     return total_removed
 
 
-def check_freshness(etf_codes: list[str], data_dir: str = "data") -> list[str]:
-    """检查所有 ETF parquet 最新日期是否为今天。
-    返回未更新到今天的 ETF 代码列表（空列表 = 全部新鲜）。
+def check_freshness(etf_codes: list[str], data_dir: str = "data", max_age_days: int = 3) -> list[str]:
+    """检查所有 ETF parquet 最新日期是否在容忍期内。
+    返回超出容忍期的 ETF 代码列表（空列表 = 全部新鲜）。
+    max_age_days: 允许的最大日历天数差距（默认 3，覆盖周末+节假日）。
     """
     today = date.today()
     stale = []
@@ -275,6 +276,7 @@ def check_freshness(etf_codes: list[str], data_dir: str = "data") -> list[str]:
             stale.append(code)
             continue
         last_date = df.index.max().date()
-        if last_date != today:
+        age = (today - last_date).days
+        if age > max_age_days:
             stale.append(code)
     return stale
