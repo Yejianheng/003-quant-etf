@@ -160,7 +160,11 @@ def run_backtest(
                 if n in prices and today in prices[n].index
             )
             total_at_open = old_value_open + repo_cash
+            # [2026-07-14] 修复：隔夜跳空导致 total_at_open < nav 时，按比例缩放目标金额避免负现金
+            scale_factor = total_at_open / exec_alloc["total_capital"] if exec_alloc.get("total_capital", 0) > 0 else 0.0
+
             for name, target_dollar in exec_alloc["positions"].items():
+                scaled_target = target_dollar * scale_factor
                 if name not in prices or today not in prices[name].index:
                     continue
                 price_open = prices[name].loc[today, "open"]
@@ -168,12 +172,12 @@ def run_backtest(
                     continue
                 per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
                 current_value = prev_positions.get(name, 0.0) * price_open
-                exec_price = price_open * (1.0 + per_slippage / 10000.0) if target_dollar > current_value else price_open * (1.0 - per_slippage / 10000.0)
-                positions[name] = target_dollar / exec_price
-                total_commission += abs(target_dollar - current_value) * commission_rate
+                exec_price = price_open * (1.0 + per_slippage / 10000.0) if scaled_target > current_value else price_open * (1.0 - per_slippage / 10000.0)
+                positions[name] = scaled_target / exec_price
+                total_commission += abs(scaled_target - current_value) * commission_rate
             # 现金守恒：总可支配资金 - 新持仓开盘市值 - 佣金
             new_target_sum = sum(
-                d for n, d in exec_alloc["positions"].items()
+                d * scale_factor for n, d in exec_alloc["positions"].items()
                 if n in prices and today in prices[n].index
             )
             repo_cash = total_at_open - new_target_sum - total_commission

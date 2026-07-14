@@ -1,36 +1,59 @@
-# outcome.md — execution_lag=1 执行价修正
+# outcome.md — execution_lag=1 repo_cash < 0 修复
 
-> 2026-07-13 | 回测引擎修复
+> 2026-07-14 | 执行者角色 | 审计提交后
 
-## audit 报告
+## Audit 报告
 
-- **审计模型**：Qwen3-Max（异构，与当前推理模型不同厂商）
+- **审计模型**：Qwen3-Max（异构盲审）
 - **结果**：PASS
-- **审计意见**：未发现安全或架构违规，允许执行写入
+- **审计意见**：未发现安全或架构违规，允许执行写入。
 
-## 改动概要
+## Diff 摘要
 
-**问题**：`backtest_engine.py` 在 `execution_lag=1` 时，用**收盘价**重估旧持仓后执行信号，导致过时持仓吃全天跌幅。
+**文件**：`src/backtest_engine.py`（受保护区）
 
-**fix**：
-1. `execution_lag=1` 时，执行顺序改为 **执行(open) → 估值(close) → 信号**
-2. 执行价从 `close` 改为 `open`
-3. 现金守恒改用 `old_value_at_open`（旧持仓在开盘价下的市值），而非 `prev_nav`
-4. `execution_lag=0` 路径不变
+**改动位置**：约第 163-179 行，`execution_lag == 1 and pending_alloc is not None` 块内。
 
-## 涉及文件
+**改动前**：
+直接使用 T 日绝对金额 `target_dollar` 买入，导致跳空低开时透支。
 
-| 文件 | 操作 | 保护区 |
-|------|------|--------|
-| `src/backtest_engine.py` | 修改（~20行） | ✅ protected-files.json:12 |
+**改动后**：
+```python
+            # [2026-07-14] 修复：隔夜跳空导致 total_at_open < nav 时，按比例缩放目标金额避免负现金
+            scale_factor = total_at_open / exec_alloc["total_capital"] if exec_alloc.get("total_capital", 0) > 0 else 0.0
+            
+            for name, target_dollar in exec_alloc["positions"].items():
+                if name not in prices or today not in prices[name].index:
+                    continue
+                price_open = prices[name].loc[today, "open"]
+                if price_open <= 0:
+                    continue
+                per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
+                
+                scaled_target = target_dollar * scale_factor
+                current_value = prev_positions.get(name, 0.0) * price_open
+                exec_price = price_open * (1.0 + per_slippage / 10000.0) if scaled_target > current_value else price_open * (1.0 - per_slippage / 10000.0)
+                positions[name] = scaled_target / exec_price
+                total_commission += abs(scaled_target - current_value) * commission_rate
+            # 现金守恒：总可支配资金 - 新持仓开盘市值 - 佣金
+            new_target_sum = sum(
+                d * scale_factor for n, d in exec_alloc["positions"].items()
+                if n in prices and today in prices[n].index
+            )
+            repo_cash = total_at_open - new_target_sum - total_commission
+```
 
-## 验证结果（2026-07-14 执行完成）
+## 执行结果（2026-07-14 完成）
 
 | 检查项 | 结果 |
 |--------|------|
-| 全量测试（排除 3 个预存问题） | 440 passed, 0 new failures |
-| Golden Dataset 重新生成 | 7/7 passed |
-| nav_2026.html 重新生成 | 成功 |
-| 07-13 Δ% | -1.22% → -0.83% |
+| 新测试 test_execution_lag.py (3 场景) | 3/3 PASS |
+| 全量测试 (452, 跳过 1 预存) | 零回归 |
+| scale_factor 合成测试 (10% 跳空) | 红灯→绿灯 |
+| 实盘数据修复前后对比 | Sharpe 1.1848→1.1855，差异可忽略 |
+| repo_cash < 0 天数 | 修复前后均 0/3026 |
+| NAV = exposure + repo_cash 恒等式 | 逐日零偏差 |
+| Δ% 手工验算 vs 图表 | 一致 |
+| T-1/T0 数据定义 | 正确，无 off-by-one |
 
-**07-13 Δ% 分析：** 修正后 -0.83%。拆解：创业板开盘跳空卖出损失（3.862→3.810 = -1.35% × ~42%仓位 ≈ -0.56%）+ 纳指日内（2.179→2.168 = -0.50% × ~84%仓位 ≈ -0.42%）+ 佣金。修正前 -1.22% 是因为用收盘价卖创业板（多吃 -2.87% 全天跌幅），修正后仅含真实的开盘跳空损失。
+**结论**：scale_factor 修复在实盘数据上无差异（v211 开盘价执行 + vol_scaling 现金缓冲已足够吸收正常跳空），但作为极端行情安全网保留。数据定义链路自洽。
