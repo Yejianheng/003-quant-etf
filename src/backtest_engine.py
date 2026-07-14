@@ -146,14 +146,52 @@ def run_backtest(
             )
             continue
 
-        # 估值：昨日持仓按今日收盘价重估
-        if positions:
-            nav = sum(
-                positions.get(name, 0.0) * prices[name].loc[today, "close"]
-                for name in positions
-                if name in prices and today in prices[name].index
+        # execution_lag=1：先执行(open)→再估值(close)→再信号
+        # execution_lag=0：原逻辑 估值(close)→信号→执行(close)
+        if execution_lag == 1 and pending_alloc is not None:
+            # === 执行：pending_alloc 以开盘价成交 ===
+            exec_alloc = pending_alloc
+            prev_positions = positions.copy()
+            positions = {}
+            total_commission = 0.0
+            old_value_open = sum(
+                prev_positions.get(n, 0.0) * prices[n].loc[today, "open"]
+                for n in prev_positions
+                if n in prices and today in prices[n].index
             )
-            nav += repo_cash
+            total_at_open = old_value_open + repo_cash
+            for name, target_dollar in exec_alloc["positions"].items():
+                if name not in prices or today not in prices[name].index:
+                    continue
+                price_open = prices[name].loc[today, "open"]
+                if price_open <= 0:
+                    continue
+                per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
+                current_value = prev_positions.get(name, 0.0) * price_open
+                exec_price = price_open * (1.0 + per_slippage / 10000.0) if target_dollar > current_value else price_open * (1.0 - per_slippage / 10000.0)
+                positions[name] = target_dollar / exec_price
+                total_commission += abs(target_dollar - current_value) * commission_rate
+            # 现金守恒：总可支配资金 - 新持仓开盘市值 - 佣金
+            new_target_sum = sum(
+                d for n, d in exec_alloc["positions"].items()
+                if n in prices and today in prices[n].index
+            )
+            repo_cash = total_at_open - new_target_sum - total_commission
+
+            # === 估值：新持仓以收盘价重估 ===
+            nav = sum(
+                positions.get(n, 0.0) * prices[n].loc[today, "close"]
+                for n in positions if n in prices and today in prices[n].index
+            ) + repo_cash
+
+        else:
+            # execution_lag=1 首日（pending_alloc=None）或 execution_lag=0
+            # 统一：先估值→再信号→再执行
+            if positions:
+                nav = sum(
+                    positions.get(n, 0.0) * prices[n].loc[today, "close"]
+                    for n in positions if n in prices and today in prices[n].index
+                ) + repo_cash
 
         # 更新 nav_series
         nav_series.iloc[t] = nav
@@ -167,10 +205,8 @@ def run_backtest(
         current_dd = signal["drawdown_stop"]["drawdown"]
         if prev_drawdown_level == "liquidate":
             if current_level != "liquidate":
-                # drawdown 已自然回落到 halve/warning/normal → 恢复
                 pass  # signal 已包含正确的 level/multiplier
             elif liquidation_nav is not None and current_dd > -0.12:
-                # repo 利息让 nav 回升，drawdown 已 < 12% → 强制恢复 halve
                 signal["drawdown_stop"]["level"] = "halve"
                 signal["drawdown_stop"]["position_multiplier"] = 0.5
                 signal["execution"]["final_multiplier"] = min(
@@ -183,47 +219,39 @@ def run_backtest(
 
         alloc = allocate_capital(signal, nav, defense_ratio=defense_ratio)
 
-        # 调仓：目标金额 → 股数（含滑点 + 佣金）
-        if execution_lag == 0:
-            exec_day = today
+        # 执行(close)：lag=0 所有日 或 lag=1 首日引导（无 pending_alloc）
+        is_bootstrap = execution_lag == 1 and pending_alloc is None
+        if execution_lag == 0 or is_bootstrap:
             exec_alloc = alloc
-        else:
-            if pending_alloc is None:
-                exec_alloc = alloc
-            else:
-                exec_alloc = pending_alloc
+            prev_positions = positions.copy()
+            positions = {}
+            total_commission = 0.0
+            if exec_alloc is not None:
+                for name, target_dollar in exec_alloc["positions"].items():
+                    if name not in prices or today not in prices[name].index:
+                        continue
+                    price = prices[name].loc[today, "close"]
+                    if price <= 0:
+                        continue
+                    per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
+                    current_value = prev_positions.get(name, 0.0) * price
+                    exec_price = price * (1.0 + per_slippage / 10000.0) if target_dollar > current_value else price * (1.0 - per_slippage / 10000.0)
+                    positions[name] = target_dollar / exec_price
+                    total_commission += abs(target_dollar - current_value) * commission_rate
+            positions_value = sum(
+                positions.get(n, 0.0) * prices[n].loc[today, "close"]
+                for n in positions if n in prices and today in prices[n].index
+            )
+            repo_cash = nav - positions_value - total_commission
+            # lag=1 首日引导：保存 alloc 供明日开盘执行
+            if is_bootstrap:
+                pending_alloc = alloc
+
+        # lag=1 非首日：仅保存明日信号（今日已在循环顶部用 open 执行）
+        if execution_lag == 1 and pending_alloc is not None and not is_bootstrap:
             pending_alloc = alloc
-            exec_day = today
 
-        prev_positions = positions.copy()
-        positions = {}
-        total_commission = 0.0
-        if exec_alloc is not None:
-            for name, target_dollar in exec_alloc["positions"].items():
-                if name not in prices or exec_day not in prices[name].index:
-                    continue
-                price = prices[name].loc[exec_day, "close"]
-                if price <= 0:
-                    continue
-                # 买卖方向 → 执行价（per-ETF 价差优先，兜底统一滑点）
-                per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
-                current_value = prev_positions.get(name, 0.0) * price
-                if target_dollar > current_value:
-                    exec_price = price * (1.0 + per_slippage / 10000.0)
-                else:
-                    exec_price = price * (1.0 - per_slippage / 10000.0)
-                positions[name] = target_dollar / exec_price
-                # 佣金按换手额
-                turnover = abs(target_dollar - current_value)
-                total_commission += turnover * commission_rate
-        # repo_cash 总是残差（现金守恒，扣除佣金）
-        positions_value = sum(
-            positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
-            for name in positions
-            if name in prices and exec_day in prices[name].index
-        )
-        repo_cash = nav - positions_value - total_commission
-
+        exec_day = today  # record_daily 通用
         # 日记录（含持仓明细，供 Golden Dataset 使用）
         pos_detail = {name: positions.get(name, 0.0) * prices[name].loc[exec_day, "close"]
                       for name in positions

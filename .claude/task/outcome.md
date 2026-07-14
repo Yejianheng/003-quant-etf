@@ -1,40 +1,31 @@
-# 执行发现 — 仓位报告趋势方向表述错误
+# outcome.md — execution_lag=1 执行价修正
 
-> 2026-07-09 | 来源：`仓位` 命令输出 | 执行者：@执行
+> 2026-07-13 | 回测引擎修复
 
-## 现象
+## audit 报告
 
-`scripts/check_position.py` 输出的期间回顾中，关于创业板趋势反转的方向表述与实际相反。
+- **审计模型**：Qwen3-Max（异构，与当前推理模型不同厂商）
+- **结果**：PASS
+- **审计意见**：未发现安全或架构违规，允许执行写入
 
-## 数据核实
+## 改动概要
 
-| 日期 | 创业板收盘 | 40日 trend_strength | 趋势状态 |
-|------|-----------|-------------------|---------|
-| 2026-07-08 | 3.867 | **-0.1065** | 空头（inactive） |
-| 2026-07-09 | 4.040 (+4.5%) | **+0.1664** | 多头（active） |
+**问题**：`backtest_engine.py` 在 `execution_lag=1` 时，用**收盘价**重估旧持仓后执行信号，导致过时持仓吃全天跌幅。
 
-**实际：** 由空翻多（inactive → active）
-**脚本输出：** 声称由多翻空（方向反了）
+**fix**：
+1. `execution_lag=1` 时，执行顺序改为 **执行(open) → 估值(close) → 信号**
+2. 执行价从 `close` 改为 `open`
+3. 现金守恒改用 `old_value_at_open`（旧持仓在开盘价下的市值），而非 `prev_nav`
+4. `execution_lag=0` 路径不变
 
-## 代码位置
+## 涉及文件
 
-趋势变化描述在 `scripts/daily_signal.py:185`：
+| 文件 | 操作 | 保护区 |
+|------|------|--------|
+| `src/backtest_engine.py` | 修改（~20行） | ✅ protected-files.json:12 |
 
-```python
-lines.append(f"  {day['date']}  {verb} {c['etf']}（趋势转{'正' if c['event'] == 'added' else '负'}）")
-```
+## 验证计划
 
-- `_replay_gap()` (line 105-132) 负责计算 daily_active 及变化事件（added/removed）
-- `_format_replay_segments()` (line 135-200) 格式化输出
-
-## 初步判断
-
-事件类型判定逻辑（added=趋势转正, removed=趋势转负）本身是正确的。问题可能出在：
-
-1. `_replay_gap()` 中 prev_active 的初始值从 state.last_active 获取，若 state 已包含了当日信号，prev_active 已是最新值，导致 added/removed 判定错位
-2. 或者回放循环中 prev_active 与当日 active 比较时出现逻辑反转
-
-## 需要顾问审查
-
-- 趋势反转方向为何与数据相反
-- 修复方案
+1. 跑全量测试（`pytest tests/ -v`）
+2. 重新生成 nav_2026.html
+3. 检查 07-13 Δ% 应从 -1.22% 变为约 -0.28%
