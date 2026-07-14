@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.backtest_engine import run_backtest, REPO_ANNUAL_RATE
+from src.backtest_engine import run_backtest
 
 
 def make_mock_prices(n_days=252, trend=0.0002, volatility=0.01):
