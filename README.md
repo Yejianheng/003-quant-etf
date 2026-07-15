@@ -28,7 +28,7 @@ python scripts/nav_chart.py       # 净值图表
 
 ## 版本
 
-`v212` — execution_lag=1 scale_factor 安全网 + T+1 开盘价执行 + 数据定义链路验证。
+`v213` — 数据管线加固：时间门禁（15:00 前不拉当日）+ WebFetch 核验（偏差 >0.3% 阻断）+ 拉取≠入库。杜绝盘中不完整日线污染数据。
 
 ## 目录
 
