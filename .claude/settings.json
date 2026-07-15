@@ -14,7 +14,8 @@
       "WebFetch(domain:global.v2ex.co)",
       "WebFetch(domain:blog.csdn.net)",
       "WebFetch(domain:yooqur.com)",
-      "Bash(rm \"d:\\\\AI项目\\\\003-quant-etf\\\\.claude\\\\memo\\\\offense-layer-design.md\")"
+      "Bash(rm \"d:\\\\AI项目\\\\003-quant-etf\\\\.claude\\\\memo\\\\offense-layer-design.md\")",
+      "WebFetch(domain:gu.qq.com)"
     ],
     "additionalDirectories": [
       "D:\\AI项目\\004-quant-stock\\项目日志",

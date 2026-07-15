@@ -38,10 +38,31 @@ def main() -> None:
     data_dir = DATA_DIR
     output_path = OUTPUT_PATH
 
-    # 1. 更新 5 ETF parquet
+    # 1. 拉取 5 ETF 数据（不入库，待 Web 核验）
     codes = list(ETF_UNIVERSE.values())
+    results = []
     for code in codes:
-        update_single_etf(code, data_dir)
+        results.append(update_single_etf(code, data_dir))
+
+    # 检查待核验
+    needs_verify = [r for r in results if r.get("needs_verify")]
+    if needs_verify:
+        print(f"\n[待核验] {len(needs_verify)} 只需要 Web 核验")
+        for r in needs_verify:
+            print(f"  {r['name']}({r['code']}) {r['source']} close={r['latest_close']:.3f}")
+        print("---")
+        print("请执行窗口 AI WebFetch 核验以上收盘价：")
+        print("  https://q.stock.sohu.com/cn/{code}/lshq.shtml")
+        print("核验通过后运行入库脚本，然后重新执行 仓位 命令。")
+        sys.exit(0)
+
+    # 检查失败
+    failures = [r for r in results if not r["ok"]]
+    if failures:
+        print("\n[失败]")
+        for r in failures:
+            print(f"  {r['name']}({r['code']}): {r['reason']}")
+        sys.exit(1)
 
     # 新鲜度门禁：任一 ETF 未更新到今日 → 中止
     stale = check_freshness(codes, data_dir)

@@ -1,3 +1,4 @@
+# [2026-07-15] 修改：数据管线补充时间门禁 + Web 核验 + 阻断机制（v213）
 # 基建与环境约束
 
 ## 数据库
@@ -8,11 +9,19 @@
 
 ## 数据管线
 
-- 主数据源：AKShare → 东方财富（`ak.fund_etf_hist_em`），数据最全但 WAF 不稳定
-- 备用数据源：AKShare → 新浪（`ak.fund_etf_hist_sina`），已跨源验证（2026-05-28，相关性 0.999）
-- 失败策略：东方财富重试 3 次（2s→4s→8s 指数退避）→ 自动切换新浪
+### 数据源优先级
+- 主数据源：AKShare → 腾讯财经（`ak.stock_zh_a_hist_tx`，个股接口取 ETF 日线）
+- 备用数据源：AKShare → 东方财富（`ak.fund_etf_hist_em`，ETF 专用接口），重试 3 次（2s→4s→8s 指数退避）
+- 兜底数据源：AKShare → 新浪（`ak.fund_etf_hist_sina`），已跨源验证（2026-05-28，相关性 0.999）
 - 拆分检测：任一源返回后统一走跌幅 >50% 自动前复权修正
 - 分时限流：Hook pre_bash.js — 东方财富 `_em` 5min 间隔 / 新浪 `_sina` 3s 间隔
+
+### 数据核验（2026-07-15 新增，v213）
+- **时间门禁**：15:00 前不拉取当日数据（盘中日线不完整，见 513100 7/14 事故）
+- **拉取 ≠ 入库**：`update_single_etf()` 拉到数据后不写入 parquet，返回待核验标记
+- **Web 核验**：执行窗口 AI 调 WebFetch 查行情页核验收盘价，偏差 >0.3% 阻断
+- **阻断规则**：任一 ETF 核验失败 → 全部阻断，提示"建议半小时后重试"；两源均空也阻断
+- **核验 URL**：`https://q.stock.sohu.com/cn/{code}/lshq.shtml`，备用 `https://quote.eastmoney.com/fund/{code}.html`
 
 ## 第三方服务
 

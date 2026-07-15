@@ -1,59 +1,77 @@
-# outcome.md — execution_lag=1 repo_cash < 0 修复
+# outcome.md — 数据管线加固：时间门禁 + Web 核验 + 阻断机制
 
-> 2026-07-14 | 执行者角色 | 审计提交后
+> 2026-07-15 | 执行者角色 | 三文件改动 + 测试 + 端到端验证
 
-## Audit 报告
+## 改动文件
 
-- **审计模型**：Qwen3-Max（异构盲审）
-- **结果**：PASS
-- **审计意见**：未发现安全或架构违规，允许执行写入。
+| 文件 | 改动 | 保护状态 |
+|------|------|---------|
+| `scripts/update_data.py` | 重写：时间门禁 + 拉取不入库 + 待核验 dict 返回 | 非保护区 |
+| `scripts/nav_chart.py` | `update_all_etfs()` 返回结构化结果 + `main()` 阻断逻辑 | 非保护区 |
+| `scripts/check_position.py` | `main()` 中 `仓位` 命令加核验阻断 | 非保护区 |
+| `tests/test_data_validation.py` | 新增 6 个测试：时间门禁/拉取/阻断/回退 | 非保护区 |
 
-## Diff 摘要
+`src/data_pipeline.py` 未触动。
 
-**文件**：`src/backtest_engine.py`（受保护区）
+## 改动说明
 
-**改动位置**：约第 163-179 行，`execution_lag == 1 and pending_alloc is not None` 块内。
+### 1. 时间门禁（`update_data.py`）
 
-**改动前**：
-直接使用 T 日绝对金额 `target_dollar` 买入，导致跳空低开时透支。
+交易日 15:00 前 `end_date` 截断到昨天，防止盘中拉取不完整日线。
 
-**改动后**：
+### 2. 拉取不入库（`update_data.py`）
+
+数据源优先级：腾讯 > 东方财富（含新浪 fallback），单源拉到即用。拉到数据返回 `needs_verify=True` + `new_data`（DataFrame），**不写入 parquet**。待 Web 核验通过后再入库。
+
+返回格式：
 ```python
-            # [2026-07-14] 修复：隔夜跳空导致 total_at_open < nav 时，按比例缩放目标金额避免负现金
-            scale_factor = total_at_open / exec_alloc["total_capital"] if exec_alloc.get("total_capital", 0) > 0 else 0.0
-            
-            for name, target_dollar in exec_alloc["positions"].items():
-                if name not in prices or today not in prices[name].index:
-                    continue
-                price_open = prices[name].loc[today, "open"]
-                if price_open <= 0:
-                    continue
-                per_slippage = (slippage_bps_map or {}).get(name, slippage_bps)
-                
-                scaled_target = target_dollar * scale_factor
-                current_value = prev_positions.get(name, 0.0) * price_open
-                exec_price = price_open * (1.0 + per_slippage / 10000.0) if scaled_target > current_value else price_open * (1.0 - per_slippage / 10000.0)
-                positions[name] = scaled_target / exec_price
-                total_commission += abs(scaled_target - current_value) * commission_rate
-            # 现金守恒：总可支配资金 - 新持仓开盘市值 - 佣金
-            new_target_sum = sum(
-                d * scale_factor for n, d in exec_alloc["positions"].items()
-                if n in prices and today in prices[n].index
-            )
-            repo_cash = total_at_open - new_target_sum - total_commission
+# 拉到数据待核验
+{"ok": True, "needs_verify": True, "name": str, "code": str,
+ "source": "tx"|"em", "new_data": DataFrame,
+ "latest_close": float, "latest_date": str}
+# 已是最新
+{"ok": True, "needs_verify": False, "reason": "up_to_date"}
+# 两源均空
+{"ok": False, "reason": "no_data"}
 ```
 
-## 执行结果（2026-07-14 完成）
+### 3. Web 核验清单（三文件统一）
 
-| 检查项 | 结果 |
-|--------|------|
-| 新测试 test_execution_lag.py (3 场景) | 3/3 PASS |
-| 全量测试 (452, 跳过 1 预存) | 零回归 |
-| scale_factor 合成测试 (10% 跳空) | 红灯→绿灯 |
-| 实盘数据修复前后对比 | Sharpe 1.1848→1.1855，差异可忽略 |
-| repo_cash < 0 天数 | 修复前后均 0/3026 |
-| NAV = exposure + repo_cash 恒等式 | 逐日零偏差 |
-| Δ% 手工验算 vs 图表 | 一致 |
-| T-1/T0 数据定义 | 正确，无 off-by-one |
+`update_data.py`、`nav_chart.py`、`check_position.py` 在 `needs_verify=True` 时打印统一格式待核验清单 + 自动论证指令 → `sys.exit(0)`。核验通过后重新执行命令，此时数据已是最新，跳过拉取直接进入后续流程。
 
-**结论**：scale_factor 修复在实盘数据上无差异（v211 开盘价执行 + vol_scaling 现金缓冲已足够吸收正常跳空），但作为极端行情安全网保留。数据定义链路自洽。
+### 4. 阻断机制（`nav_chart.py` / `check_position.py`）
+
+- `no_data`（两源均空）→ 阻断，打印"建议半小时后重试"
+- `needs_verify`（待核验）→ 阻断，打印核验清单
+- 核验通过 → 正常生成图表/仓位报告
+
+## 测试结果
+
+| 套件 | 结果 |
+|------|------|
+| `test_data_validation.py` (6 tests) | 6/6 PASS |
+| `test_slippage.py` (3 tests) | 3/3 PASS（零回归） |
+
+测试覆盖：
+- 15:00 前 `end_date` 截断到昨天（`test_before_15_skip_when_already_today`）
+- 15:00 后 `end_date` 保持今天（`test_after_15_fetch_today`）
+- 拉取成功返回 `needs_verify=True`（`test_fetch_ok_returns_needs_verify`）
+- 腾讯空 → 东方回退（`test_tx_fallback_to_em`）
+- 两源均空 → `ok=False`（`test_both_empty`）
+- 已是最新 → `needs_verify=False`（`test_up_to_date`）
+
+## 端到端验证
+
+```
+python scripts/update_data.py → "所有 ETF 已是最新，无需更新。" ✅
+python scripts/nav_chart.py   → "净值对比图已生成：nav_2026.html" ✅
+513100 7/14: close=2.170 涨跌幅=+0.09% ✅
+```
+
+## 约束遵守
+
+- ✅ `src/data_pipeline.py` 不动
+- ✅ 数据源优先级：腾讯 > 东方财富（含新浪 fallback）
+- ✅ 拉取 ≠ 入库，Web 核验通过后才入库
+- ✅ 时间门禁：15:00 前不拉当日
+- ✅ 阻断提示统一：`建议半小时后重试`

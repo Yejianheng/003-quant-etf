@@ -48,11 +48,15 @@ COLORS = {
 }
 
 
-def update_all_etfs(data_dir: str = "data") -> None:
+def update_all_etfs(data_dir: str = "data") -> dict:
     """
-    更新全部 5 只防御 ETF 的 parquet 文件。
+    更新全部 5 只防御 ETF 的 parquet 文件（拉取不入库，待核验）。
     任一 parquet 缺失 → FileNotFoundError。
+    返回 {"all_ok": bool, "needs_verify": bool, "results": list[dict]}。
     """
+    results = []
+    all_ok = True
+    has_verify = False
     for name in DEFENSE_NAMES:
         code = ETF_UNIVERSE[name]
         path = os.path.join(data_dir, f"{code}.parquet")
@@ -60,7 +64,13 @@ def update_all_etfs(data_dir: str = "data") -> None:
             raise FileNotFoundError(
                 f"parquet 文件缺失: {path}，请先运行 scripts/update_data.py"
             )
-        update_single_etf(code, data_dir)
+        r = update_single_etf(code, data_dir)
+        results.append(r)
+        if not r["ok"]:
+            all_ok = False
+        if r.get("needs_verify"):
+            has_verify = True
+    return {"all_ok": all_ok, "needs_verify": has_verify, "results": results}
 
 
 def load_prices(data_dir: str = "data") -> dict[str, pd.DataFrame]:
@@ -801,7 +811,22 @@ def main(data_dir: str = "data", output_path: str = "nav_2026.html") -> None:
     5. 截断到 2026-01-01 + 归一化
     6. 生成 HTML
     """
-    update_all_etfs(data_dir)
+    update_result = update_all_etfs(data_dir)
+
+    # 阻断：数据拉取失败（两源均空）
+    if not update_result["all_ok"]:
+        for r in update_result["results"]:
+            if not r["ok"]:
+                print(f"  [{r['code']}] {r['reason']}")
+        sys.exit("建议半小时后重试")
+
+    # 阻断：数据待 Web 核验
+    if update_result["needs_verify"]:
+        print("[待核验]")
+        for r in update_result["results"]:
+            if r.get("needs_verify"):
+                print(f"  {r['name']}({r['code']}) {r['source']} close={r['latest_close']:.3f}")
+        sys.exit("请先完成 Web 核验后再生成图表")
 
     # 新鲜度门禁：任一 ETF 未更新到今日 → 中止
     codes = list(ETF_UNIVERSE.values())
