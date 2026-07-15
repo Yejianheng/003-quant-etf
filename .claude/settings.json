@@ -15,12 +15,14 @@
       "WebFetch(domain:blog.csdn.net)",
       "WebFetch(domain:yooqur.com)",
       "Bash(rm \"d:\\\\AI项目\\\\003-quant-etf\\\\.claude\\\\memo\\\\offense-layer-design.md\")",
-      "WebFetch(domain:gu.qq.com)"
+      "WebFetch(domain:gu.qq.com)",
+      "Bash(cd \"d:/AI项目/003-quant-etf\" && rm .claude/role.json)"
     ],
     "additionalDirectories": [
       "D:\\AI项目\\004-quant-stock\\项目日志",
       "D:\\AI项目\\004-quant-stock\\attribution",
-      "d:\\AI项目\\003-quant-etf\\.claude\\memo"
+      "d:\\AI项目\\003-quant-etf\\.claude\\memo",
+      "d:\\AI项目\\003-quant-etf\\.claude"
     ]
   },
   "hooks": {
