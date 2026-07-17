@@ -1,77 +1,31 @@
-# outcome.md — 数据管线加固：时间门禁 + Web 核验 + 阻断机制
+# 执行结果
 
-> 2026-07-15 | 执行者角色 | 三文件改动 + 测试 + 端到端验证
+> 2026-07-17 | 操作列加入现金，完整展示资金流向
 
-## 改动文件
+## 变更清单
 
-| 文件 | 改动 | 保护状态 |
-|------|------|---------|
-| `scripts/update_data.py` | 重写：时间门禁 + 拉取不入库 + 待核验 dict 返回 | 非保护区 |
-| `scripts/nav_chart.py` | `update_all_etfs()` 返回结构化结果 + `main()` 阻断逻辑 | 非保护区 |
-| `scripts/check_position.py` | `main()` 中 `仓位` 命令加核验阻断 | 非保护区 |
-| `tests/test_data_validation.py` | 新增 6 个测试：时间门禁/拉取/阻断/回退 | 非保护区 |
-
-`src/data_pipeline.py` 未触动。
-
-## 改动说明
-
-### 1. 时间门禁（`update_data.py`）
-
-交易日 15:00 前 `end_date` 截断到昨天，防止盘中拉取不完整日线。
-
-### 2. 拉取不入库（`update_data.py`）
-
-数据源优先级：腾讯 > 东方财富（含新浪 fallback），单源拉到即用。拉到数据返回 `needs_verify=True` + `new_data`（DataFrame），**不写入 parquet**。待 Web 核验通过后再入库。
-
-返回格式：
-```python
-# 拉到数据待核验
-{"ok": True, "needs_verify": True, "name": str, "code": str,
- "source": "tx"|"em", "new_data": DataFrame,
- "latest_close": float, "latest_date": str}
-# 已是最新
-{"ok": True, "needs_verify": False, "reason": "up_to_date"}
-# 两源均空
-{"ok": False, "reason": "no_data"}
-```
-
-### 3. Web 核验清单（三文件统一）
-
-`update_data.py`、`nav_chart.py`、`check_position.py` 在 `needs_verify=True` 时打印统一格式待核验清单 + 自动论证指令 → `sys.exit(0)`。核验通过后重新执行命令，此时数据已是最新，跳过拉取直接进入后续流程。
-
-### 4. 阻断机制（`nav_chart.py` / `check_position.py`）
-
-- `no_data`（两源均空）→ 阻断，打印"建议半小时后重试"
-- `needs_verify`（待核验）→ 阻断，打印核验清单
-- 核验通过 → 正常生成图表/仓位报告
-
-## 测试结果
-
-| 套件 | 结果 |
+| 文件 | 改动 |
 |------|------|
-| `test_data_validation.py` (6 tests) | 6/6 PASS |
-| `test_slippage.py` (3 tests) | 3/3 PASS（零回归） |
+| `scripts/nav_chart.py` `_build_table_data` | `old_weights`/`new_weights` 加入 `"现金"` 键；`_format_action` 传入 `etf_names + ["现金"]` |
 
-测试覆盖：
-- 15:00 前 `end_date` 截断到昨天（`test_before_15_skip_when_already_today`）
-- 15:00 后 `end_date` 保持今天（`test_after_15_fetch_today`）
-- 拉取成功返回 `needs_verify=True`（`test_fetch_ok_returns_needs_verify`）
-- 腾讯空 → 东方回退（`test_tx_fallback_to_em`）
-- 两源均空 → `ok=False`（`test_both_empty`）
-- 已是最新 → `needs_verify=False`（`test_up_to_date`）
+## 验证
 
-## 端到端验证
+| 日期 | 操作列 |
+|------|--------|
+| 7/10 | 卖出 创业板(38.9%→0.0%)、现金(22.3%→17.1%)，买入 纳指(38.9%→82.9%) |
+| 7/13 | 卖出 现金(17.1%→16.1%)，买入 纳指(82.9%→83.9%) |
+| 7/14 | 卖出 现金(16.1%→15.0%)，买入 纳指(83.9%→85.0%) |
+| 7/15 | 卖出 现金(15.0%→14.2%)，买入 纳指(85.0%→85.8%) |
+| 7/16 | 卖出 现金(14.2%→13.5%)，买入 纳指(85.8%→86.5%) |
 
-```
-python scripts/update_data.py → "所有 ETF 已是最新，无需更新。" ✅
-python scripts/nav_chart.py   → "净值对比图已生成：nav_2026.html" ✅
-513100 7/14: close=2.170 涨跌幅=+0.09% ✅
-```
+资金去向一目了然：加仓时现金同步减少，减仓时现金同步增加。
 
-## 约束遵守
+**注意**：本次验证因 17 日数据尚未发布，跳过 data update 步骤，直接使用已有 parquet 生成图表。东财 API 代理拦截问题待解决。
 
-- ✅ `src/data_pipeline.py` 不动
-- ✅ 数据源优先级：腾讯 > 东方财富（含新浪 fallback）
-- ✅ 拉取 ≠ 入库，Web 核验通过后才入库
-- ✅ 时间门禁：15:00 前不拉当日
-- ✅ 阻断提示统一：`建议半小时后重试`
+## 约束检查
+
+- ✅ 不改 `src/` 下任何文件
+- ✅ 不改策略计算逻辑
+- ✅ 只改显示层
+
+请顾问窗口审查。

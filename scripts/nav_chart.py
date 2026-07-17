@@ -256,9 +256,9 @@ def _format_action(old_weights, new_weights, etf_names):
     for name in etf_names:
         old_w = old_weights.get(name, 0.0)
         new_w = new_weights.get(name, 0.0)
-        if new_w > old_w + 0.001:
+        if new_w > old_w + 0.005:
             bought.append((name, old_w, new_w))
-        elif old_w > new_w + 0.001:
+        elif old_w > new_w + 0.005:
             sold.append((name, old_w, new_w))
 
     if not sold and not bought:
@@ -266,10 +266,10 @@ def _format_action(old_weights, new_weights, etf_names):
 
     parts = []
     if sold:
-        sold_str = '、'.join(f"{name}({old_w*100:.0f}%→{new_w*100:.0f}%)" for name, old_w, new_w in sold)
+        sold_str = '、'.join(f"{name}({old_w*100:.1f}%→{new_w*100:.1f}%)" for name, old_w, new_w in sold)
         parts.append(f"卖出 {sold_str}")
     if bought:
-        bought_str = '、'.join(f"{name}({old_w*100:.0f}%→{new_w*100:.0f}%)" for name, old_w, new_w in bought)
+        bought_str = '、'.join(f"{name}({old_w*100:.1f}%→{new_w*100:.1f}%)" for name, old_w, new_w in bought)
         parts.append(f"买入 {bought_str}")
 
     return "，".join(parts)
@@ -298,26 +298,41 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
         active = [n.strip() for n in active_str.split(";") if n.strip()] if active_str else []
         n_active = len(active)
 
+        # 权重 = 前日信号等权 × 前日 final_multiplier（今日实际敞口）
+        prev_final_mult = float(signal_row.get("final_multiplier", 1.0))
         weights = {}
         for name in etf_names:
             if is_all_cash:
                 weights[name] = 0.0
             else:
-                weights[name] = 1.0 / n_active if name in active and n_active > 0 else 0.0
-
-        total_weight = sum(weights.values())
-
-        # --- 操作列 = 明日将执行的调仓（当日信号 vs 前日信号） ---
-        # new_weights = 当日信号等权（明日将持）；old_weights = 前日信号等权（今日实际持）
-        new_weights = _defense_active_weights(row, etf_names)
-        old_weights = _defense_active_weights(records_df.iloc[i - 1], etf_names)
-        action = _format_action(old_weights, new_weights, etf_names)
+                weights[name] = prev_final_mult / n_active if name in active and n_active > 0 else 0.0
 
         # --- 逆回购 ---
         repo_amount = float(row.get("repo_amount", 0.0))
         cb_triggered = bool(row.get("circuit_breaker_triggered", False))
         defense_count = int(row.get("defense_count", 0))
         is_repo_day = cb_triggered or defense_count == 0
+
+        # --- 操作列 = 明日将执行的调仓（含现金，完整展示资金流向） ---
+        today_final_mult = float(row.get("final_multiplier", 1.0))
+        today_active_str = row.get("defense_active", "")
+        today_active = [n.strip() for n in today_active_str.split(";") if n.strip()] if today_active_str else []
+
+        old_weights = weights.copy()
+        old_cash = round(1.0 - sum(weights.values()), 4)
+        old_weights["现金"] = max(0.0, old_cash)
+
+        n_today_active = len(today_active)
+        new_weights = {}
+        for name in etf_names:
+            if cb_triggered or defense_count == 0:
+                new_weights[name] = 0.0
+            else:
+                new_weights[name] = today_final_mult / n_today_active if name in today_active and n_today_active > 0 else 0.0
+        new_cash = round(1.0 - sum(new_weights.values()), 4)
+        new_weights["现金"] = max(0.0, new_cash)
+
+        action = _format_action(old_weights, new_weights, etf_names + ["现金"])
 
         # --- NAV（当日实际 NAV） ---
         nav = float(row["nav"]) / first_nav
@@ -334,8 +349,8 @@ def _build_table_data(records_df, etf_names, ew_nav=None, nav_6040=None):
             "ew_nav": ew_val,
             "nav_6040": v6040_val,
             "weights": [round(weights.get(n, 0.0), 4) for n in etf_names],
-            "cash": round(1.0 - total_weight, 4),
-            "repo_amount": 1.0 if is_all_cash else 0.0,
+            "cash": round(1.0 - prev_final_mult, 4),
+            "repo_amount": round(1.0 - prev_final_mult, 4),
             "is_repo_day": is_repo_day,
             "action": action,
             "delta": delta_nav,
@@ -705,9 +720,9 @@ function renderTable() {{
     html += '<td>' + (row.nav_6040 != null ? row.nav_6040.toFixed(4) : '—') + '</td>';
     for (let j = 0; j < 5; j++) {{
       const w = row.weights[j];
-      html += '<td>' + (w > 0 ? (w * 100).toFixed(0) + '%' : '—') + '</td>';
+      html += '<td>' + (w > 0 ? (w * 100).toFixed(1) + '%' : '—') + '</td>';
     }}
-    html += '<td>' + (row.repo_amount > 0 ? (row.repo_amount * 100).toFixed(0) + '%' : '—') + '</td>';
+    html += '<td>' + (row.repo_amount > 0 ? (row.repo_amount * 100).toFixed(1) + '%' : '—') + '</td>';
     html += '<td class="action-cell">' + row.action + '</td>';
     if (row.delta === null) {{
       html += '<td>—</td>';

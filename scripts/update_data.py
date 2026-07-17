@@ -111,7 +111,7 @@ def main(data_dir: str = "data") -> None:
         for r in needs_verify:
             print(f"  {r['name']}({r['code']}) {r['source']} close={r['latest_close']:.3f}")
         print("---")
-        print("请执行窗口 AI WebFetch 核验以上收盘价：")
+        print("请执行窗口 AI WebSearch 核验以上收盘价：")
         print("  https://q.stock.sohu.com/cn/{code}/lshq.shtml")
         print("核验通过后运行入库脚本，然后重新执行命令。")
         print("核验失败则等待数据源更新后重试。")

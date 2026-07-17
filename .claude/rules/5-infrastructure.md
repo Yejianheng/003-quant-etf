@@ -19,7 +19,7 @@
 ### 数据核验（2026-07-15 新增，v213）
 - **时间门禁**：15:00 前不拉取当日数据（盘中日线不完整，见 513100 7/14 事故）
 - **拉取 ≠ 入库**：`update_single_etf()` 拉到数据后不写入 parquet，返回待核验标记
-- **Web 核验**：执行窗口 AI 调 WebFetch 查行情页核验收盘价，偏差 >0.3% 阻断
+- **Web 核验**：执行窗口 AI 调 WebSearch 查行情页核验收盘价，偏差 >0.3% 阻断
 - **阻断规则**：任一 ETF 核验失败 → 全部阻断，提示"建议半小时后重试"；两源均空也阻断
 - **核验 URL**：`https://q.stock.sohu.com/cn/{code}/lshq.shtml`，备用 `https://quote.eastmoney.com/fund/{code}.html`
 

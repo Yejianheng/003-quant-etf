@@ -51,7 +51,7 @@ def main() -> None:
         for r in needs_verify:
             print(f"  {r['name']}({r['code']}) {r['source']} close={r['latest_close']:.3f}")
         print("---")
-        print("请执行窗口 AI WebFetch 核验以上收盘价：")
+        print("请执行窗口 AI WebSearch 核验以上收盘价：")
         print("  https://q.stock.sohu.com/cn/{code}/lshq.shtml")
         print("核验通过后运行入库脚本，然后重新执行 仓位 命令。")
         sys.exit(0)
@@ -113,14 +113,16 @@ def main() -> None:
     print()
 
     print("【当前持仓】")
+    final_mult = signal["execution"]["final_multiplier"]
     total_w = sum(target_weights.values())
     for name in DEFENSE_NAMES:
         w = target_weights.get(name)
         if w is not None:
-            print(f"  {name}    {w:.1%}")
+            print(f"  {name}    {w * final_mult:.1%}")
         else:
             print(f"  {name}    —")
-    cash_pct = max(0.0, 1.0 - total_w)
+    scaled_total = total_w * final_mult
+    cash_pct = max(0.0, 1.0 - scaled_total)
     print(f"  现金        {cash_pct:.1%}")
     print()
 
@@ -149,6 +151,8 @@ def main() -> None:
 
     sf = signal["defense"]["scaling_factor"]
     print(f"  波动率缩放：sf={sf:.2f}")
+    final_mult = signal["execution"]["final_multiplier"]
+    print(f"  仓位乘数：combined_mult={final_mult:.3f}")
 
     cb = signal["circuit_breaker"]
     print(f"  相关性熔断：{'触发' if cb['triggered'] else '正常'}（{cb['smoothed_corr']:.2f}）")
