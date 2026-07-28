@@ -145,3 +145,19 @@ T   close:  估值 → NAV_T → 信号 → alloc(T+1)
 图表 T 日持仓 = T-1 信号，T 日 Δ% = (NAV_T/NAV_{T-1})-1，含隔夜跳空+日内涨跌。
 
 **历史**：早期 Look-Ahead Bias 验证时 T+1 数据因现金泄漏 bug（repo_cash 取值错误）被压至 Sharpe 0.02。修复后 T+1 恢复至 1.02（commit `17aea9e` → `f88bcd6`）。v211 开盘价执行后 T+1 升至 ~1.18（与 T+0 差距大幅缩小，因新逻辑开盘即捕获当日收益）。
+
+---
+
+## 常见陷阱：final_multiplier 在全空仓时的语义
+
+**规则**：当 `defense_active=[]`（趋势过滤剔除全部 ETF）时，`final_multiplier` 默认 = 1.0。这个 1.0 的含义是"100% 资金已路由到 repo"，**不是**"100% 买了 ETF"。
+
+**陷阱**：任何用 `1.0 - final_multiplier` 反推现金比例的代码，在全空仓时会得到 0%（错误）。
+
+**正确做法**：
+- 显示现金比例 → 用 `1.0 - sum(weights.values())`
+- 判断是否空仓 → 用 `defense_count == 0` 或 `sum(weights) == 0`
+- 策略计算中 `final_multiplier * weights` 不受影响（weights 全 0 时乘积正确）
+
+**历史**：v214 全面核查发现 nav_chart.py 全现金期间 cash 列显示 0%（#2026-07-28 日志）。
+@claude-override-approved
