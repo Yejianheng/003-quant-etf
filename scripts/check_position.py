@@ -1,3 +1,4 @@
+# [2026-07-24] 修改：适配三源交叉验证返回，一致数据自动入库（v214）
 # [2026-06-25] 新增：间隔回放 + 期间回顾报告段
 # [2026-06-23] 新增：新鲜度门禁 — 数据不齐禁止输出仓位
 # [2026-06-11] 新增：仓位三合一脚本 — 更新数据 → 持仓报告 + 操作指令 + 更新图表
@@ -13,7 +14,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from scripts.update_data import update_single_etf
+from scripts.update_data import update_single_etf, _write_parquet_incremental
 from scripts.daily_signal import (
     load_prices,
     _load_state,
@@ -38,11 +39,16 @@ def main() -> None:
     data_dir = DATA_DIR
     output_path = OUTPUT_PATH
 
-    # 1. 拉取 5 ETF 数据（不入库，待 Web 核验）
+    # 1. 拉取 5 ETF 数据（三源交叉验证，一致则自动入库）
     codes = list(ETF_UNIVERSE.values())
     results = []
     for code in codes:
         results.append(update_single_etf(code, data_dir))
+
+    # 三源/两源一致 → 自动入库
+    for r in results:
+        if r["ok"] and not r.get("needs_verify") and "new_data" in r:
+            _write_parquet_incremental(r["code"], r["new_data"], data_dir)
 
     # 检查待核验
     needs_verify = [r for r in results if r.get("needs_verify")]

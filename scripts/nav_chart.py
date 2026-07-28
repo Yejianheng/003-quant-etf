@@ -1,3 +1,4 @@
+# [2026-07-24] 修改：update_all_etfs 适配三源交叉验证返回，一致数据自动入库（v214）
 # [2026-06-23] 新增：新鲜度门禁 — 数据不齐禁止生成图表
 # [2026-06-22] 修复：权重还原纯等权，现金列二元判断（空仓=100%，持仓=0）
 # [2026-06-18] 修改：新增等权基准 + 60/40 基准线（图表 + 表格列）
@@ -28,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.backtest_engine import run_backtest
 from src.signal_generator import DEFAULT_PARAMS, DEFENSE_NAMES
 from src.etf_universe import ETF_UNIVERSE
-from src.data_pipeline import load_from_parquet, check_freshness
+from src.data_pipeline import load_from_parquet, save_to_parquet, check_freshness
 from scripts.update_data import update_single_etf
 
 START_DATE = "2026-01-01"
@@ -50,7 +51,7 @@ COLORS = {
 
 def update_all_etfs(data_dir: str = "data") -> dict:
     """
-    更新全部 5 只防御 ETF 的 parquet 文件（拉取不入库，待核验）。
+    更新全部 5 只防御 ETF 的 parquet 文件（三源交叉验证，一致则自动入库）。。
     任一 parquet 缺失 → FileNotFoundError。
     返回 {"all_ok": bool, "needs_verify": bool, "results": list[dict]}。
     """
@@ -70,6 +71,17 @@ def update_all_etfs(data_dir: str = "data") -> dict:
             all_ok = False
         if r.get("needs_verify"):
             has_verify = True
+
+    # 自动通过的数据直接入库
+    for r in results:
+        if r["ok"] and not r.get("needs_verify") and "new_data" in r:
+            path = os.path.join(data_dir, f"{r['code']}.parquet")
+            existing = load_from_parquet(path)
+            combined = pd.concat([existing, r["new_data"]])
+            combined = combined[~combined.index.duplicated(keep="last")]
+            combined = combined.sort_index()
+            save_to_parquet(combined, path)
+
     return {"all_ok": all_ok, "needs_verify": has_verify, "results": results}
 
 

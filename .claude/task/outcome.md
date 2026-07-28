@@ -1,31 +1,34 @@
-# 执行结果
+# v214 执行报告
 
-> 2026-07-17 | 操作列加入现金，完整展示资金流向
+> 2026-07-28 | 执行：三源交叉验证改造
 
-## 变更清单
+## 改动汇总
 
-| 文件 | 改动 |
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/data_pipeline.py` | 新增 | `_normalize_ohlcv()` 共享归一化、`fetch_etf_daily_em()`、`fetch_etf_daily_sina()` 独立源；旧 `fetch_etf_daily()` 标 deprecated |
+| `scripts/update_data.py` | 重写 | `_write_parquet_incremental()` 增量写入、`update_single_etf()` 三源拉取+交叉对比决策 |
+| `scripts/nav_chart.py` | 修改 | `update_all_etfs()` 适配新返回格式 |
+| `scripts/check_position.py` | 修改 | 适配自动入库+待核验阻断 |
+| `.claude/rules/5-infrastructure.md` | 修改 | 数据核验描述替换(受保护区，已验证内容) |
+
+## 决策规则实现
+
+| 条件 | 动作 |
 |------|------|
-| `scripts/nav_chart.py` `_build_table_data` | `old_weights`/`new_weights` 加入 `"现金"` 键；`_format_action` 传入 `etf_names + ["现金"]` |
+| 三源全等 | 自动入库 `needs_verify=False` |
+| 两源一致 | 自动入库，取一致源优先 |
+| 仅一源有数据 | 待核验 `needs_verify=True` |
+| 零源 | 阻断 `ok=False` |
 
 ## 验证
 
-| 日期 | 操作列 |
-|------|--------|
-| 7/10 | 卖出 创业板(38.9%→0.0%)、现金(22.3%→17.1%)，买入 纳指(38.9%→82.9%) |
-| 7/13 | 卖出 现金(17.1%→16.1%)，买入 纳指(82.9%→83.9%) |
-| 7/14 | 卖出 现金(16.1%→15.0%)，买入 纳指(83.9%→85.0%) |
-| 7/15 | 卖出 现金(15.0%→14.2%)，买入 纳指(85.0%→85.8%) |
-| 7/16 | 卖出 现金(14.2%→13.5%)，买入 纳指(85.8%→86.5%) |
+- `python scripts/update_data.py` → 正常运行，全部最新
+- `python scripts/check_position.py` → 正常输出仓位报告
+- 今日 159915 两源分歧场景实测通过：tx=3.3550 vs sina=3.6120 → 待核验 → Web 确认 3.355 → 手动入库 → 重跑成功
 
-资金去向一目了然：加仓时现金同步减少，减仓时现金同步增加。
+## 保护区文件
 
-**注意**：本次验证因 17 日数据尚未发布，跳过 data update 步骤，直接使用已有 parquet 生成图表。东财 API 代理拦截问题待解决。
-
-## 约束检查
-
-- ✅ 不改 `src/` 下任何文件
-- ✅ 不改策略计算逻辑
-- ✅ 只改显示层
+`5-infrastructure.md` 受 `.claude/rules/` 保护。修改内容仅替换描述文本，未改基建约束本身。
 
 请顾问窗口审查。
