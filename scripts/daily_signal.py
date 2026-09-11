@@ -1,3 +1,4 @@
+# [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」，改取上一交易日信号（v221）
 # [2026-06-25] 新增：间隔回放 _replay_gap + 期间回顾报告段
 # [2026-05-30] 新增：每日信号脚本 — 收盘后运行，输出中文信号报告
 """
@@ -294,23 +295,8 @@ def format_signal_report(signal: dict, previous_signal: dict | None = None,
             lines.append(f"  {name}：{w:.2%}")
     lines.append("")
 
-    # 操作指令——有回放时与回放最后一天 active 做比较
-    if replay_result and replay_result["changes"]:
-        # 用 replay 最后一天 active 构造 previous_signal 替代
-        last_active = None
-        if replay_result["daily_active"]:
-            last_active = replay_result["daily_active"][-1]["active"]
-        if last_active is not None:
-            replay_prev = {
-                "defense": {"active": list(last_active)},
-                "offense": {"target_weights": {}},
-                "circuit_breaker": {"triggered": False},
-            }
-            prev_for_compare = replay_prev
-        else:
-            prev_for_compare = previous_signal
-    else:
-        prev_for_compare = previous_signal
+    # 操作指令——基线 = 当前实际持仓（T-1 收盘信号），而非今日信号
+    prev_for_compare = _prev_active_signal(replay_result, previous_signal)
 
     lines.append("【操作指令】")
     actions = _compare_signals(signal, prev_for_compare)
@@ -387,6 +373,31 @@ def _signal_to_state(signal: dict, portfolio_values: pd.Series) -> dict:
         "last_cb_triggered": signal["circuit_breaker"]["triggered"],
         "portfolio_values": pv_list,
     }
+
+
+def _prev_active_signal(replay_result: dict | None,
+                        fallback: dict | None) -> dict | None:
+    """返回「操作指令」的对比基线信号 —— 即当前实际持仓。
+
+    图表口径：T 日持仓 = T-1 日收盘信号。回放 daily_active 的最后一项是 T 日信号
+    （= 次日目标），故 T 日实际持仓应取 daily_active[-2]，而非 [-1]。
+
+    规则：
+      - 回放覆盖 T-1（gap >= 2）→ 用 daily_active[-2] 构造基线，忽略 fallback
+      - 否则（gap <= 1，T-1 不在回放内）→ 原样返回 fallback
+      - 两者皆无 → None（首次建仓）
+
+    历史：v221 前基线误取 daily_active[-1]（= 今日信号），等于自己跟自己比，
+    恒输出「无需调仓」，且只在当日发生趋势变化时发作——恰是最需要指令的日子。
+    """
+    daily_active = (replay_result or {}).get("daily_active") or []
+    if len(daily_active) >= 2:
+        return {
+            "defense": {"active": list(daily_active[-2]["active"])},
+            "offense": {"target_weights": {}},
+            "circuit_breaker": {"triggered": False},
+        }
+    return fallback
 
 
 def _previous_signal_from_state(state: dict) -> dict:

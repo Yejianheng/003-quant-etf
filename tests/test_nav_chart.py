@@ -1,3 +1,4 @@
+# [2026-09-11] 修复：update_single_etf 裸 MagicMock 致 needs_verify 为真值，脚本误入「待核验」分支提前退出（v221）
 # [2026-06-18] 修改：适配换手统计行（表格底部新增换手率 + 成本行）
 # [2026-06-18] 修改：适配等权基准 + 60/40 基准线（dataset 7→9, 颜色 +2, 表头 +2 列）
 # [2026-06-18] 新增：repo 可视化元素测试（逆回购净值虚线 + 空仓背景带 + repo 汇总）
@@ -19,10 +20,15 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 
-def _make_ohlcv_df(start_date="2025-06-01", days=260):
+# update_single_etf 的桩返回值：ok 且无需核验，使脚本走正常入库路径。
+# 裸 MagicMock 的 needs_verify 为真值，会误触发「待核验」分支导致脚本提前 sys.exit。
+_UPDATE_STUB = {"ok": True, "needs_verify": False}
+
+
+def _make_ohlcv_df(start_date="2025-06-01", days=260, seed=42):
     dates = pd.date_range(start_date, periods=days, freq="B")
     n = len(dates)
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(seed)
     prices = 1.0 * np.exp(np.cumsum(rng.normal(0.0002, 0.008, n)))
     return pd.DataFrame({
         "open": prices * 0.99,
@@ -34,13 +40,17 @@ def _make_ohlcv_df(start_date="2025-06-01", days=260):
 
 
 def _make_fake_parquets(data_dir, start_date="2025-06-01", days=260):
-    """在 data_dir 创建 5 只防御 ETF 的模拟 parquet 文件。"""
+    """在 data_dir 创建 5 只防御 ETF 的模拟 parquet 文件。
+
+    每只 ETF 使用不同随机种子：若共用种子，5 条价格序列完全相同，
+    趋势强度同步，权重恒定 → 操作列恒为「无需调仓」，无法验证调仓文本。
+    """
     from src.etf_universe import ETF_UNIVERSE
     from src.signal_generator import DEFENSE_NAMES
     os.makedirs(data_dir, exist_ok=True)
-    for name in DEFENSE_NAMES:
+    for i, name in enumerate(DEFENSE_NAMES):
         code = ETF_UNIVERSE[name]
-        df = _make_ohlcv_df(start_date, days)
+        df = _make_ohlcv_df(start_date, days, seed=42 + i * 13)
         path = os.path.join(data_dir, f"{code}.parquet")
         df.to_parquet(path)
 
@@ -53,7 +63,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -99,7 +109,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -128,7 +138,7 @@ class TestNavChart:
             code = ETF_UNIVERSE[name]
             df = _make_ohlcv_df("2025-06-01", 260)
             df.to_parquet(os.path.join(data_dir, f"{code}.parquet"))
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.update_single_etf", mock_update):
@@ -140,7 +150,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -167,7 +177,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -189,7 +199,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -211,7 +221,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):
@@ -228,7 +238,7 @@ class TestNavChart:
         data_dir = str(tmp_path / "data")
         output_path = str(tmp_path / "nav_2026.html")
         _make_fake_parquets(data_dir, start_date="2025-06-01", days=260)
-        mock_update = MagicMock()
+        mock_update = MagicMock(return_value=_UPDATE_STUB)
 
         from scripts.nav_chart import main
         with patch("scripts.nav_chart.check_freshness", return_value=[]):

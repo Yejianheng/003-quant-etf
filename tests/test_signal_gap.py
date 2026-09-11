@@ -1,3 +1,4 @@
+# [2026-09-11] 新增：操作指令基线测试 — 回归 v221「永远无需调仓」bug
 # [2026-06-25] 新增：信号间隔回放测试 — 5 场景
 """测试 _replay_gap — 信号间隔自动补全"""
 
@@ -307,7 +308,8 @@ class TestCheckPositionReplay:
 
         with (
             patch("scripts.check_position.check_freshness", return_value=[]),
-            patch("scripts.check_position.update_single_etf", MagicMock()),
+            patch("scripts.check_position.update_single_etf",
+                  MagicMock(return_value={"ok": True, "needs_verify": False})),
             patch("scripts.check_position.DATA_DIR", data_dir),
             patch("scripts.check_position.OUTPUT_PATH", str(tmp_path / "nav_2026.html")),
             patch("scripts.check_position.update_chart", MagicMock()),
@@ -318,3 +320,172 @@ class TestCheckPositionReplay:
         assert "期间回顾" in captured, (
             f"state 14天前应输出'期间回顾'，实际输出：\n{captured}"
         )
+
+
+# ---- v221 回归：操作指令对比基线 ----
+
+def _baseline_signal(active):
+    """构造 _compare_signals 可用的信号摘要。"""
+    return {
+        "defense": {"active": list(active)},
+        "offense": {"target_weights": {}},
+        "circuit_breaker": {"triggered": False},
+    }
+
+
+class TestPrevActiveSignal:
+    """_prev_active_signal(): 对比基线 = 上一交易日收盘信号（= T 日实际持仓）
+
+    图表口径：T 日持仓 = T-1 日收盘信号。回放 daily_active 最后一项是 T 日信号
+    （= 次日目标），故 T 日持仓应取 daily_active[-2]。
+    """
+
+    def test_replay_covers_prev_day_uses_second_to_last(self):
+        """回放覆盖 T-1（gap≥2）→ 基线取 daily_active[-2]"""
+        from scripts.daily_signal import _prev_active_signal
+
+        replay = {
+            "daily_active": [
+                {"date": "2025-06-23", "active": ["沪深300", "纳指"]},
+                {"date": "2025-06-24", "active": ["纳指"]},
+            ]
+        }
+
+        got = _prev_active_signal(replay, _baseline_signal(["纳指"]))
+
+        assert got["defense"]["active"] == ["沪深300", "纳指"], (
+            f"基线应为 T-1 持仓，实际 {got['defense']['active']}"
+        )
+
+    def test_replay_single_day_uses_fallback(self):
+        """回放只覆盖 T（gap==1）→ T-1 不在回放内，基线取 fallback"""
+        from scripts.daily_signal import _prev_active_signal
+
+        replay = {"daily_active": [{"date": "2025-06-24", "active": ["纳指"]}]}
+        fallback = _baseline_signal(["沪深300", "纳指"])
+
+        assert _prev_active_signal(replay, fallback) is fallback, (
+            "gap==1 时应原样返回 fallback（state 中上一交易日信号）"
+        )
+
+    def test_no_replay_uses_fallback(self):
+        """无回放 / 回放为空 → 基线取 fallback"""
+        from scripts.daily_signal import _prev_active_signal
+
+        fallback = _baseline_signal(["纳指"])
+
+        assert _prev_active_signal(None, fallback) is fallback
+        assert _prev_active_signal({"daily_active": []}, fallback) is fallback
+
+    def test_first_run_returns_none(self):
+        """首次运行（无回放、无 fallback）→ None，报告应输出'首次建仓'"""
+        from scripts.daily_signal import _prev_active_signal
+
+        assert _prev_active_signal(None, None) is None
+        assert _prev_active_signal({"daily_active": []}, None) is None
+
+    def test_fallback_ignored_when_replay_covers_prev_day(self):
+        """回放覆盖 T-1 时，fallback 不再参与——避免 state 陈旧值干扰"""
+        from scripts.daily_signal import _prev_active_signal
+
+        replay = {
+            "daily_active": [
+                {"date": "2025-06-23", "active": ["纳指"]},
+                {"date": "2025-06-24", "active": ["纳指", "黄金"]},
+            ]
+        }
+        stale = _baseline_signal(["沪深300", "创业板", "纳指", "黄金", "国债ETF"])
+
+        got = _prev_active_signal(replay, stale)
+
+        assert got["defense"]["active"] == ["纳指"], (
+            f"应取回放 T-1，不应取陈旧 fallback，实际 {got['defense']['active']}"
+        )
+
+
+class TestReportActionBaseline:
+    """format_signal_report: 当日趋势变化时必须报出买卖，而非'无需调仓'"""
+
+    @staticmethod
+    def _signal(active):
+        return {
+            "date": "2025-06-24",
+            "defense": {
+                "trend_strengths": {n: 0.5 for n in active},
+                "active": list(active),
+                "target_weights": {n: 1.0 / len(active) for n in active},
+                "scaling_factor": 1.0,
+                "predicted_vol": 0.08,
+            },
+            "offense": {"rankings": [], "target_weights": {}},
+            "circuit_breaker": {"triggered": False, "smoothed_corr": -0.1},
+            "drawdown_stop": {"level": "normal", "position_multiplier": 1.0,
+                              "drawdown": -0.02},
+            "execution": {"final_multiplier": 1.0, "funds_to_repo": False},
+        }
+
+    def test_last_day_flip_negative_reports_sell(self):
+        """最后一交易日趋势转负 → 报'卖出'（旧逻辑误报'无需调仓'）"""
+        from scripts.daily_signal import format_signal_report
+
+        signal = self._signal(["纳指", "黄金", "国债ETF"])
+        replay_result = {
+            "gap_trading_days": 2,
+            "last_date": "2025-06-20",
+            "today": "2025-06-24",
+            "daily_active": [
+                {"date": "2025-06-23",
+                 "active": ["纳指", "黄金", "国债ETF", "沪深300"]},
+                {"date": "2025-06-24", "active": ["纳指", "黄金", "国债ETF"]},
+            ],
+            "changes": [{"date": "2025-06-24", "event": "removed", "etf": "沪深300"}],
+        }
+
+        report = format_signal_report(signal, previous_signal=None,
+                                      replay_result=replay_result)
+
+        assert "卖出 沪深300" in report, f"应报卖出沪深300，实际：\n{report}"
+        assert "无需调仓" not in report, f"不应报无需调仓，实际：\n{report}"
+
+    def test_last_day_flip_positive_reports_buy(self):
+        """最后一交易日趋势转正 → 报'买入'"""
+        from scripts.daily_signal import format_signal_report
+
+        signal = self._signal(["纳指", "沪深300"])
+        replay_result = {
+            "gap_trading_days": 2,
+            "last_date": "2025-06-20",
+            "today": "2025-06-24",
+            "daily_active": [
+                {"date": "2025-06-23", "active": ["纳指"]},
+                {"date": "2025-06-24", "active": ["纳指", "沪深300"]},
+            ],
+            "changes": [{"date": "2025-06-24", "event": "added", "etf": "沪深300"}],
+        }
+
+        report = format_signal_report(signal, previous_signal=None,
+                                      replay_result=replay_result)
+
+        assert "买入 沪深300" in report, f"应报买入沪深300，实际：\n{report}"
+        assert "无需调仓" not in report, f"不应报无需调仓，实际：\n{report}"
+
+    def test_no_change_still_reports_no_action(self):
+        """回放覆盖 T-1 且与今日一致 → 仍应报'无需调仓'（不能矫枉过正）"""
+        from scripts.daily_signal import format_signal_report
+
+        signal = self._signal(["纳指", "黄金"])
+        replay_result = {
+            "gap_trading_days": 2,
+            "last_date": "2025-06-20",
+            "today": "2025-06-24",
+            "daily_active": [
+                {"date": "2025-06-23", "active": ["纳指", "黄金"]},
+                {"date": "2025-06-24", "active": ["纳指", "黄金"]},
+            ],
+            "changes": [],
+        }
+
+        report = format_signal_report(signal, previous_signal=None,
+                                      replay_result=replay_result)
+
+        assert "无需调仓" in report, f"持仓未变应报无需调仓，实际：\n{report}"

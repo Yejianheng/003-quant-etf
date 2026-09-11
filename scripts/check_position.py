@@ -1,3 +1,5 @@
+# [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」（v221）
+# [2026-09-11] 修改：持仓段拆为「当前持有」（T-1 信号）+「次日目标仓位」（T 信号）
 # [2026-07-24] 修改：适配三源交叉验证返回，一致数据自动入库（v214）
 # [2026-06-25] 新增：间隔回放 + 期间回顾报告段
 # [2026-06-23] 新增：新鲜度门禁 — 数据不齐禁止输出仓位
@@ -19,6 +21,7 @@ from scripts.daily_signal import (
     load_prices,
     _load_state,
     _previous_signal_from_state,
+    _prev_active_signal,
     _build_portfolio_value,
     _compare_signals,
     _replay_gap,
@@ -96,17 +99,8 @@ def main() -> None:
     if state:
         prev_signal = _previous_signal_from_state(state)
 
-    # 有回放且期间有变化 → 操作指令基于回放最后一天 active
-    if replay_result and replay_result["changes"]:
-        last_active = None
-        if replay_result["daily_active"]:
-            last_active = replay_result["daily_active"][-1]["active"]
-        if last_active is not None:
-            prev_signal = {
-                "defense": {"active": list(last_active)},
-                "offense": {"target_weights": {}},
-                "circuit_breaker": {"triggered": False},
-            }
+    # 操作指令基线 = 当前实际持仓（T-1 收盘信号），与图表 T 日持仓口径一致
+    prev_signal = _prev_active_signal(replay_result, prev_signal)
 
     # 6. 保存 state（避免下次重复回放）
     _save_state(data_dir, _signal_to_state(signal, portfolio_value))
@@ -118,7 +112,14 @@ def main() -> None:
     print(f"=== {today} 仓位报告 ===")
     print()
 
-    print("【当前持仓】")
+    # 当前实际持仓 = T-1 收盘信号（当日已在开盘按该信号换仓）
+    held = list(prev_signal["defense"]["active"]) if prev_signal else []
+    print("【当前持有】")
+    print(f"  持有：{'、'.join(held) if held else '空仓'}（{len(held)} 只等权）")
+    print()
+
+    # 次日目标 = T 收盘信号，次日开盘执行
+    print("【次日目标仓位】")
     final_mult = signal["execution"]["final_multiplier"]
     total_w = sum(target_weights.values())
     for name in DEFENSE_NAMES:
