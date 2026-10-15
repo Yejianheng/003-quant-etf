@@ -1,3 +1,4 @@
+# [2026-10-15] 修复：断言 6 配置 → 3 配置，与 run_dynamic_backtest.py 的实际产出一致
 # [2026-05-29] 新增：analyze_dynamic_results 脚本测试
 
 import os
@@ -40,21 +41,24 @@ class TestLoadNavs:
     def test_loads_all_configs(self):
         """加载所有 6 种配置的净值文件"""
         navs = load_navs()
-        assert len(navs) >= 6, f"应有至少 6 条净值序列，实际 {len(navs)}"
+        assert len(navs) >= 3, f"应有至少 3 条净值序列，实际 {len(navs)}"
+        assert set(navs) <= {"纯防御", "纯进攻", "混合"}
 
 
 class TestLoadRecords:
     def test_loads_all_configs(self):
         """加载所有 6 种配置的记录文件"""
         records = load_records()
-        assert len(records) >= 6, f"应有至少 6 条记录，实际 {len(records)}"
+        assert len(records) >= 3, f"应有至少 3 条记录，实际 {len(records)}"
+        assert set(records) <= {"纯防御", "纯进攻", "混合"}
 
 
 class TestLoadSummary:
     def test_loads_summary(self):
         """加载汇总 CSV"""
         df = load_summary()
-        assert len(df) >= 6
+        assert len(df) >= 3
+        assert set(df["label"]) == {"纯防御", "纯进攻", "混合"}
         assert "label" in df.columns
         assert "strategy_Sharpe" in df.columns or "strategy_总收益" in df.columns
 

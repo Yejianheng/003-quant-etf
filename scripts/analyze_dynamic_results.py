@@ -13,7 +13,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 BASE = os.path.join(os.path.dirname(__file__), "..")
 OUTPUT_DIR = os.path.join(BASE, "output")
 
-CONFIG_LABELS = ["纯防御", "K=2", "K=3", "K=4", "K=5", "K=6"]
+# [2026-10-15] 修复：原为 ["纯防御","K=2".."K=6"]（K 值扫描时代的旧设计）。
+#             run_dynamic_backtest.py 已于 2026-05-29 简化为 纯防御/纯进攻/混合 三配置，
+#             此处未同步 —— load_navs/load_records 只是靠 output/ 里遗留的旧 nav_K=*.csv
+#             才返回 6 条，实际读的是已废弃设计的数据。改为与产出方一致。
+CONFIG_LABELS = ["纯防御", "纯进攻", "混合"]
 
 
 def load_navs() -> dict[str, pd.Series]:
