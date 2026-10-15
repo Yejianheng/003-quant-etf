@@ -1,3 +1,4 @@
+# [2026-10-15] 修复：「当前持有」改用 held_names，不再用 defense.active 冒充持仓
 # [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」（v221）
 # [2026-09-11] 修改：持仓段拆为「当前持有」（T-1 信号）+「次日目标仓位」（T 信号）
 # [2026-07-24] 修改：适配三源交叉验证返回，一致数据自动入库（v214）
@@ -28,6 +29,7 @@ from scripts.daily_signal import (
     _format_replay_segments,
     _save_state,
     _signal_to_state,
+    held_names,
 )
 from src.signal_generator import generate_signal, DEFAULT_PARAMS, DEFENSE_NAMES
 from src.etf_universe import ETF_UNIVERSE
@@ -113,9 +115,14 @@ def main() -> None:
     print()
 
     # 当前实际持仓 = T-1 收盘信号（当日已在开盘按该信号换仓）
-    held = list(prev_signal["defense"]["active"]) if prev_signal else []
+    # [2026-10-15] 修复：改用 held_names —— 此前直接用 defense.active（趋势幸存名单），
+    # 熔断触发或乘数归零时 active 依然非空，会报出并不存在的持仓。
+    held = held_names(prev_signal)
     print("【当前持有】")
-    print(f"  持有：{'、'.join(held) if held else '空仓'}（{len(held)} 只等权）")
+    if held:
+        print(f"  持有：{'、'.join(held)}（{len(held)} 只等权）")
+    else:
+        print("  持有：空仓（100% 逆回购）")
     print()
 
     # 次日目标 = T 收盘信号，次日开盘执行

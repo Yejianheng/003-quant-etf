@@ -210,8 +210,12 @@ def _compare_signals(current: dict, previous: dict | None) -> list[str]:
             return ["全部清仓（熔断触发）"]
         return ["首次建仓"]
 
-    # 熔断触发 → 无条件清仓
+    # 熔断触发 → 清仓；但若昨日已在熔断中（早已空仓），再报一次是重复指令。
+    # [2026-10-15] 修复：此前只读 current，previous 完全失效，导致熔断持续期间
+    # 每天都输出「全部清仓」。与 v221 修的「恒输出无需调仓」是同一族的单边判断 bug。
     if current["circuit_breaker"]["triggered"]:
+        if previous.get("circuit_breaker", {}).get("triggered"):
+            return ["无需调仓（熔断持续）"]
         return ["全部清仓（熔断触发）"]
 
     actions = []
@@ -371,8 +375,32 @@ def _signal_to_state(signal: dict, portfolio_values: pd.Series) -> dict:
         "last_active": signal["defense"]["active"],
         "last_offense_weights": signal["offense"]["target_weights"],
         "last_cb_triggered": signal["circuit_breaker"]["triggered"],
+        "last_final_multiplier": signal["execution"]["final_multiplier"],
         "portfolio_values": pv_list,
     }
+
+
+def held_names(previous_signal: dict | None) -> list[str]:
+    """由上一交易日信号推出「当前实际持有」的 ETF 名单。
+
+    [2026-10-15] 新增：此前 check_position.py 直接用 defense.active，而 active 是
+    趋势过滤幸存名单，不含熔断与仓位乘数 —— 熔断清零时 active 依然非空，
+    于是报出「持有 X、Y」而实际是 100% 逆回购。这是 CLAUDE.md 已记载的
+    final_multiplier 语义陷阱的另一张脸。
+
+    实际持仓为空的条件（任一满足）：
+      - 熔断触发（资金全部路由到逆回购）
+      - final_multiplier == 0（回撤止损清仓）
+    旧 state 无 execution 字段时退回 active，保持向后兼容。
+    """
+    if not previous_signal:
+        return []
+    if previous_signal.get("circuit_breaker", {}).get("triggered"):
+        return []
+    execution = previous_signal.get("execution") or {}
+    if "final_multiplier" in execution and execution["final_multiplier"] == 0:
+        return []
+    return list(previous_signal.get("defense", {}).get("active", []))
 
 
 def _prev_active_signal(replay_result: dict | None,
@@ -401,12 +429,19 @@ def _prev_active_signal(replay_result: dict | None,
 
 
 def _previous_signal_from_state(state: dict) -> dict:
-    """从 state dict 重构上一交易日信号摘要。"""
-    return {
+    """从 state dict 重构上一交易日信号摘要。
+
+    [2026-10-15] 补充 execution.final_multiplier：held_names 需要它判断是否空仓。
+    旧 state 无该字段 → 不放入 execution，held_names 会退回 active。
+    """
+    previous = {
         "defense": {"active": state.get("last_active", [])},
         "offense": {"target_weights": state.get("last_offense_weights", {})},
         "circuit_breaker": {"triggered": state.get("last_cb_triggered", False)},
     }
+    if "last_final_multiplier" in state:
+        previous["execution"] = {"final_multiplier": state["last_final_multiplier"]}
+    return previous
 
 
 # ---- 主入口 ----

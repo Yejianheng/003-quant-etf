@@ -1,3 +1,7 @@
+# [2026-10-15] 修复：三源复权口径统一为不复权（adjust="qfq"→""）。此前腾讯/东财取前复权、
+#            新浪只能取不复权，三源比的是两个不同对象；平时"前复权 vs 前复权"通过后写入
+#            不复权历史，即 2026-09-29 接缝事故的成因。复权改由 src/dividend_adjust.py
+#            在「研究行情层」独立完成，原始行情层只存不复权。
 # [2026-07-24] 修改：提取 _normalize_ohlcv 共享归一化，新增 fetch_etf_daily_em/sina 独立源（v214）
 # [2026-06-23] 新增：fetch_etf_daily_tx 腾讯财经主源 + check_freshness 新鲜度门禁
 # [2026-06-18] 新增：trim_isolated_dates — 剔除跨 ETF 不一致的孤立交易日
@@ -113,7 +117,7 @@ def fetch_etf_daily_tx(code: str, start_date: str, end_date: str) -> pd.DataFram
             symbol=tx_symbol,
             start_date=start_date.replace("-", ""),
             end_date=end_date.replace("-", ""),
-            adjust="qfq",
+            adjust="",  # 2026-10-15：三源统一不复权，复权在研究行情层做（见 dividend_adjust.py）
         )
     except Exception as e:
         logger.warning(f"腾讯财经调用失败 (code={code}): {type(e).__name__}: {e}")
@@ -172,7 +176,7 @@ def fetch_etf_daily_em(code: str, start_date: str, end_date: str) -> pd.DataFram
                 symbol=code,
                 start_date=start_date.replace("-", ""),
                 end_date=end_date.replace("-", ""),
-                adjust="qfq",
+                adjust="",  # 2026-10-15：三源统一不复权，复权在研究行情层做（见 dividend_adjust.py）
             )
             if df is None or df.empty:
                 return pd.DataFrame()
@@ -215,7 +219,7 @@ def fetch_etf_daily(code: str, start_date: str, end_date: str) -> pd.DataFrame:
                 symbol=code,
                 start_date=start_date.replace("-", ""),
                 end_date=end_date.replace("-", ""),
-                adjust="qfq",
+                adjust="",  # 2026-10-15：三源统一不复权，复权在研究行情层做（见 dividend_adjust.py）
             )
         except Exception as e:
             delay = _RETRY_BASE_DELAY * (2 ** attempt)
@@ -308,6 +312,53 @@ def save_to_parquet(df: pd.DataFrame, path: str) -> None:
 def load_from_parquet(path: str) -> pd.DataFrame:
     """从 Parquet 读取 DataFrame，含 index。"""
     return pd.read_parquet(path)
+
+
+# ---- 三层数据布局（2026-10-15 新增）------------------------------------------
+# 业界标准：原始行情 / 除权因子 / 研究行情 三层分离，复权数据不覆盖原始数据。
+#   data/raw/{code}.parquet       原始行情（不复权，三源可比对，管线唯一写入目标）
+#   data/dividends/{code}.parquet 除权因子（除息日 + 每股分红）
+#   data/{code}.parquet           研究行情（分红再投，由前两层派生，策略消费此层）
+# 之所以保持 data/{code}.parquet 作为研究行情路径，是为了让既有 40+ 处
+# pd.read_parquet("data/xxx.parquet") 无需改动即可拿到正确口径。
+
+RAW_DIR_NAME = "raw"
+DIVIDEND_DIR_NAME = "dividends"
+
+
+def raw_data_path(code: str, data_dir: str = "data") -> str:
+    """原始行情（不复权）parquet 路径。"""
+    return os.path.join(data_dir, RAW_DIR_NAME, f"{code}.parquet")
+
+
+def dividend_data_path(code: str, data_dir: str = "data") -> str:
+    """除权因子 parquet 路径。"""
+    return os.path.join(data_dir, DIVIDEND_DIR_NAME, f"{code}.parquet")
+
+
+def load_dividends(code: str, data_dir: str = "data") -> pd.DataFrame:
+    """读取某只 ETF 的除息表。文件不存在 → 返回空表（视为无分红）。"""
+    path = dividend_data_path(code, data_dir)
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["dividend"])
+    return load_from_parquet(path)
+
+
+def rebuild_adjusted(code: str, data_dir: str = "data") -> bool:
+    """由「原始行情 + 除权因子」重算并写入研究行情层 data/{code}.parquet。
+
+    返回 True 表示已写入；原始行情缺失时返回 False 且不写。
+    """
+    from src.dividend_adjust import adjust_prices_for_dividends
+
+    raw_path = raw_data_path(code, data_dir)
+    if not os.path.exists(raw_path):
+        return False
+
+    raw = load_from_parquet(raw_path)
+    adjusted = adjust_prices_for_dividends(raw, load_dividends(code, data_dir))
+    save_to_parquet(adjusted, os.path.join(data_dir, f"{code}.parquet"))
+    return True
 
 
 def trim_isolated_dates(etf_codes: list[str], data_dir: str = "data") -> int:

@@ -489,3 +489,92 @@ class TestReportActionBaseline:
                                       replay_result=replay_result)
 
         assert "无需调仓" in report, f"持仓未变应报无需调仓，实际：\n{report}"
+
+
+# [2026-10-15] 新增：熔断持续期不得每天重复报「全部清仓」；持仓不得用趋势名单冒充
+class TestCircuitBreakerContinuation:
+    """_compare_signals 的熔断分支此前只读 current，基线完全失效 →
+    熔断一旦触发就每天都报「全部清仓」。与 v221 修的「恒输出无需调仓」是同一族单边判断 bug。"""
+
+    @staticmethod
+    def _signal(active, triggered, multiplier=0.0):
+        return {
+            "date": "2026-10-15",
+            "defense": {"trend_strengths": {n: 0.5 for n in active},
+                        "active": list(active),
+                        "target_weights": {n: 1.0 / len(active) for n in active} if active else {},
+                        "scaling_factor": 1.0, "predicted_vol": 0.1},
+            "offense": {"rankings": [], "target_weights": {}},
+            "circuit_breaker": {"triggered": triggered, "smoothed_corr": 0.12},
+            "drawdown_stop": {"level": "warning", "position_multiplier": 1.0,
+                              "drawdown": -0.11},
+            "execution": {"final_multiplier": multiplier, "funds_to_repo": triggered},
+        }
+
+    def test_first_cb_day_reports_liquidate(self):
+        """昨日未熔断、今日熔断 → 必须报「全部清仓」"""
+        from scripts.daily_signal import _compare_signals
+
+        actions = _compare_signals(self._signal(["纳指"], True, 0.0),
+                                   self._signal(["纳指"], False, 1.0))
+        assert actions == ["全部清仓（熔断触发）"], actions
+
+    def test_cb_continuation_reports_no_action(self):
+        """昨日已熔断、今日仍熔断 → 早已是空仓，不得再报清仓"""
+        from scripts.daily_signal import _compare_signals
+
+        actions = _compare_signals(self._signal(["纳指"], True, 0.0),
+                                   self._signal(["纳指"], True, 0.0))
+        assert "全部清仓（熔断触发）" not in actions, actions
+        assert any("无需调仓" in a for a in actions), actions
+
+    def test_cb_release_reports_rebuild(self):
+        """昨日熔断、今日解除 → 应报建仓而非清仓"""
+        from scripts.daily_signal import _compare_signals
+
+        actions = _compare_signals(self._signal(["纳指"], False, 1.0),
+                                   self._signal(["纳指"], True, 0.0))
+        assert not any("清仓" in a for a in actions), actions
+
+
+class TestHeldNames:
+    """「当前持有」不得直接用 defense.active —— 熔断或乘数归零时 active 依然非空。
+    这是 CLAUDE.md 已记载的 final_multiplier 语义陷阱的另一张脸。"""
+
+    def test_uses_active_when_fully_invested(self):
+        from scripts.daily_signal import held_names
+
+        prev = {"defense": {"active": ["纳指", "黄金"]},
+                "circuit_breaker": {"triggered": False},
+                "execution": {"final_multiplier": 1.0}}
+        assert held_names(prev) == ["纳指", "黄金"]
+
+    def test_empty_when_circuit_breaker_triggered(self):
+        from scripts.daily_signal import held_names
+
+        prev = {"defense": {"active": ["纳指", "国债ETF"]},
+                "circuit_breaker": {"triggered": True},
+                "execution": {"final_multiplier": 0.0}}
+        assert held_names(prev) == [], "熔断触发时应为空仓，不得用趋势名单冒充"
+
+    def test_empty_when_multiplier_zero(self):
+        """回撤止损清仓（multiplier=0）但熔断未触发 → 同样应为空仓"""
+        from scripts.daily_signal import held_names
+
+        prev = {"defense": {"active": ["纳指"]},
+                "circuit_breaker": {"triggered": False},
+                "execution": {"final_multiplier": 0.0}}
+        assert held_names(prev) == []
+
+    def test_missing_execution_field_defaults_to_active(self):
+        """旧 state 无 execution 字段 → 退回 active，不得崩溃"""
+        from scripts.daily_signal import held_names
+
+        prev = {"defense": {"active": ["纳指"]},
+                "circuit_breaker": {"triggered": False}}
+        assert held_names(prev) == ["纳指"]
+
+    def test_none_previous_returns_empty(self):
+        from scripts.daily_signal import held_names
+
+        assert held_names(None) == []
