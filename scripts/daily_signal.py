@@ -1,3 +1,4 @@
+# [2026-10-23] 修复：组合净值改用回测引擎真实策略净值（T+1 开盘执行），废弃五 ETF 等权伪净值
 # [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」，改取上一交易日信号（v221）
 # [2026-06-25] 新增：间隔回放 _replay_gap + 期间回顾报告段
 # [2026-05-30] 新增：每日信号脚本 — 收盘后运行，输出中文信号报告
@@ -16,6 +17,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src.backtest_engine import run_backtest
 from src.data_pipeline import load_from_parquet
 from src.etf_universe import ETF_UNIVERSE
 from src.signal_generator import generate_signal, DEFAULT_PARAMS
@@ -331,37 +333,20 @@ def _save_state(state_dir: str, state: dict) -> None:
 
 
 def _build_portfolio_value(prices: dict[str, pd.DataFrame],
-                           state: dict | None) -> pd.Series:
-    """构造组合净值序列。有历史状态则合并，无则从等权防御 ETF 从头计算。"""
-    # 等权防御 ETF 日收益率 → 累积净值
-    defense_names = [n for n in ["沪深300", "创业板", "纳指", "黄金", "国债ETF"] if n in prices]
-    if not defense_names:
-        return pd.Series(dtype=float)
+                           state: dict | None = None) -> pd.Series:
+    """构造组合净值序列 — 回测引擎（T+1 开盘执行）的真实策略净值。
 
-    # 对齐所有防御 ETF 的收盘价
-    closes = {}
-    for name in defense_names:
-        closes[name] = prices[name]["close"]
-    close_df = pd.DataFrame(closes).dropna()
-    returns = close_df.pct_change().dropna()
-    eq_returns = returns.mean(axis=1)
-    nav = (1 + eq_returns).cumprod()
-    nav.name = "nav"
+    [2026-10-23] 修复：此前用「五只防御 ETF 等权日收益 cumprod」冒充策略净值，
+    不含趋势过滤/熔断/仓位乘数/现金，导致回撤止损严重误报（曾报 -13.4%，
+    真实仅 -3.6%）。现改为直接复用回测引擎净值，与图表口径一致。
 
-    # 若有历史状态，合并到历史末端
-    if state and "portfolio_values" in state and state["portfolio_values"]:
-        hist = pd.Series(
-            [v["value"] for v in state["portfolio_values"]],
-            index=pd.DatetimeIndex([v["date"] for v in state["portfolio_values"]]),
-            name="nav",
-        )
-        # 拼接：历史 + 新数据（去重）
-        combined = pd.concat([hist, nav])
-        combined = combined[~combined.index.duplicated(keep="first")]
-        combined = combined.sort_index()
-        return combined
-
-    return nav
+    state 参数仅为兼容旧调用保留，不参与计算：旧 state 中的 portfolio_values
+    是同一等权伪净值，合并会再次污染回撤止损。
+    """
+    result = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
+    records = result["records_df"]
+    nav = pd.Series(records["nav"].values, index=records.index, name="nav")
+    return nav / nav.iloc[0]  # 归一到 1.0 起，回撤比例不变
 
 
 def _signal_to_state(signal: dict, portfolio_values: pd.Series) -> dict:
@@ -470,9 +455,9 @@ def main(data_dir: str = "data", state_dir: str = "data") -> str:
         print(f"错误：交易日不足 {MIN_TRADING_DAYS} 天（最少 {min_len} 天）", file=sys.stderr)
         sys.exit(1)
 
-    # 4. 构造组合净值
+    # 4. 构造组合净值（回测引擎真实净值，不读 state 旧伪净值）
     state = _load_state(state_dir)
-    portfolio_value = _build_portfolio_value(prices, state)
+    portfolio_value = _build_portfolio_value(prices)
 
     # 5. 间隔回放
     replay_result = _replay_gap(prices, state)

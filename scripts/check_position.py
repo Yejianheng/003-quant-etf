@@ -1,3 +1,4 @@
+# [2026-10-23] 修改：组合净值改用回测引擎真实净值，回撤止损不再基于五 ETF 等权伪净值
 # [2026-10-15] 修复：「当前持有」改用 held_names，不再用 defense.active 冒充持仓
 # [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」（v221）
 # [2026-09-11] 修改：持仓段拆为「当前持有」（T-1 信号）+「次日目标仓位」（T 信号）
@@ -92,8 +93,8 @@ def main() -> None:
     state = _load_state(data_dir)
     replay_result = _replay_gap(prices, state)
 
-    # 4. 构造组合净值 + 生成信号
-    portfolio_value = _build_portfolio_value(prices, state)
+    # 4. 构造组合净值（回测引擎真实净值）+ 生成信号
+    portfolio_value = _build_portfolio_value(prices)
     signal = generate_signal(prices, portfolio_value)
 
     # 5. 比较上一次信号（有回放则用回放最后一天对比）

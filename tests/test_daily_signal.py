@@ -1,3 +1,4 @@
+# [2026-10-23] 新增：组合净值口径回归测试 — 必须来自回测引擎真实净值，禁止等权伪净值 / 旧 state 污染
 # [2026-05-30] 新增：每日信号脚本测试 — 10 条场景
 """测试 scripts/daily_signal.py — 收盘后信号报告生成"""
 
@@ -289,3 +290,105 @@ class TestMain:
         with pytest.raises(SystemExit) as exc:
             daily_signal.main(data_dir=data_dir, state_dir=str(tmp_path))
         assert exc.value.code == 1
+
+
+# ---- 组合净值口径 ----
+
+def _make_crash_prices(n=260, crash_start=160, seed=7):
+    """5 只防御 ETF 的合成行情。
+
+    前段股债正相关 → 相关性熔断触发 → 策略转全现金；
+    后段股市持续暴跌（每日 -1.5%）、债券走平。
+    此时「等权硬扛五只 ETF」会回撤约 -25%，而真实策略应几乎无回撤。
+    """
+    dates = pd.date_range("2024-01-02", periods=n, freq="B")
+    rng = np.random.RandomState(seed)
+    stock_r = 0.0003 + rng.normal(0, 0.004, n)
+    stock_r[crash_start:] = -0.015 + rng.normal(0, 0.004, n - crash_start)
+    bond_r = 0.6 * stock_r + rng.normal(0, 0.0005, n)
+    bond_r[crash_start:] = 0.0002 + rng.normal(0, 0.0002, n - crash_start)
+    gold_r = 0.0002 + rng.normal(0, 0.003, n)
+
+    def _df(rets):
+        px = np.exp(np.cumsum(rets))
+        return pd.DataFrame({
+            "open": px, "high": px * 1.005, "low": px * 0.995,
+            "close": px, "volume": np.full(n, 1e6),
+        }, index=dates)
+
+    return {
+        "沪深300": _df(stock_r), "创业板": _df(stock_r), "纳指": _df(stock_r),
+        "黄金": _df(gold_r), "国债ETF": _df(bond_r),
+    }
+
+
+def _max_drawdown(series):
+    running_max = series.cummax()
+    return float(((series - running_max) / running_max).min())
+
+
+class TestPortfolioValue:
+    """_build_portfolio_value(): 信号用的组合净值必须是真实策略净值"""
+
+    def test_drawdown_reflects_cash_shelter_not_equal_weight(self):
+        """熔断后空仓躲过暴跌 → 策略回撤 ≤5%，而等权硬扛回撤 ≥15%"""
+        prices = _make_crash_prices()
+        from scripts.daily_signal import _build_portfolio_value
+
+        nav = _build_portfolio_value(prices, None)
+        closes = pd.DataFrame({k: v["close"] for k, v in prices.items()}).dropna()
+        ew = (1 + closes.pct_change().mean(axis=1)).cumprod().dropna()
+
+        ew_dd = _max_drawdown(ew)
+        strategy_dd = _max_drawdown(nav)
+        assert ew_dd <= -0.15, f"测试场景应含暴跌（等权回撤 {ew_dd:.2%}）"
+        assert strategy_dd >= -0.05, (
+            f"策略已熔断空仓，回撤不应超过 5%，实际 {strategy_dd:.2%}"
+            f"（等权伪净值 {ew_dd:.2%}）"
+        )
+
+    def test_matches_backtest_engine_nav(self):
+        """返回值必须与 run_backtest(execution_lag=1) 的净值序列逐日一致"""
+        from scripts.daily_signal import _build_portfolio_value
+        from src.backtest_engine import run_backtest
+        from src.signal_generator import DEFAULT_PARAMS
+
+        prices = _make_crash_prices()
+        nav = _build_portfolio_value(prices, None)
+        rec = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)["records_df"]
+        expected = pd.Series(rec["nav"].values, index=rec.index, name="nav")
+        expected = expected / expected.iloc[0]
+
+        assert nav.index.equals(expected.index), "净值日期序列必须与回测引擎一致"
+        np.testing.assert_allclose(nav.values, expected.values)
+
+    def test_ignores_legacy_state_portfolio_values(self):
+        """旧 state 里的 portfolio_values（等权伪净值）不得进入结果"""
+        from scripts.daily_signal import _build_portfolio_value
+
+        prices = _make_crash_prices()
+        legacy_state = {"portfolio_values": [{"date": "2024-06-15", "value": 0.5}]}
+        nav = _build_portfolio_value(prices, legacy_state)
+
+        assert pd.Timestamp("2024-06-15") not in nav.index, (
+            "旧 state 的伪净值日期不应出现在组合净值序列中"
+        )
+
+    def test_signal_drawdown_equals_backtest_nav_drawdown(self):
+        """仓位信号上报的回撤必须等于回测引擎真实净值的当前回撤"""
+        from scripts.daily_signal import _build_portfolio_value
+        from src.backtest_engine import run_backtest
+        from src.signal_generator import DEFAULT_PARAMS, generate_signal
+
+        prices = _make_crash_prices()
+        nav = _build_portfolio_value(prices, None)
+        signal = generate_signal(prices, nav)
+
+        rec = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)["records_df"]
+        bt = rec["nav"]
+        expected = float(((bt - bt.cummax()) / bt.cummax()).iloc[-1])
+
+        assert signal["drawdown_stop"]["drawdown"] == pytest.approx(expected), (
+            f"上报回撤 {signal['drawdown_stop']['drawdown']:.4f} "
+            f"与回测净值回撤 {expected:.4f} 不一致"
+        )
