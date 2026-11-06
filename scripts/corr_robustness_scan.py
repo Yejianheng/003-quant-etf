@@ -1,5 +1,9 @@
+# [2026-11-07] 修改：模块顶层执行改为 main() + __main__ 守卫，import 不再触发全量扫描
 # [2026-06-18] 新增：股债相关性熔断鲁棒性扫描 — smoothed_corr 分布 + 三维参数敏感性
-"""股债相关性熔断鲁棒性扫描。步骤 1-4 全部输出打印 + CSV。"""
+"""股债相关性熔断鲁棒性扫描。步骤 1-4 全部输出打印 + CSV。
+
+用法：python scripts/corr_robustness_scan.py
+"""
 import copy, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -13,62 +17,13 @@ from src.correlation_circuit_breaker import stock_basket_returns, rolling_correl
 NAMES = ['沪深300', '创业板', '纳指', '黄金', '国债ETF']
 CODES = ['510300', '159915', '513100', '518880', '511010']
 
-os.makedirs('output', exist_ok=True)
 
-# ── 加载数据 ──────────────────────────────────────────────
-prices = {n: pd.read_parquet(f'data/{c}.parquet') for n, c in zip(NAMES, CODES)}
-print(f"数据加载完成: {[(n, len(prices[n])) for n in NAMES]}")
+def load_prices() -> dict[str, pd.DataFrame]:
+    """加载 5 只防御 ETF 的 parquet。"""
+    return {n: pd.read_parquet(f'data/{c}.parquet') for n, c in zip(NAMES, CODES)}
 
-# ═══════════════════════════════════════════════════════════
-# Step 1: smoothed_corr 全期历史分布（独立计算，无需回测）
-# ═══════════════════════════════════════════════════════════
-print("\n" + "=" * 60)
-print("Step 1: smoothed_corr 全期历史分布")
-print("=" * 60)
 
-stock_prices = {n: prices[n]['close'] for n in ['沪深300', '创业板', '纳指']}
-bond_prices = prices['国债ETF']['close']
-
-stock_rets = stock_basket_returns(stock_prices)
-bond_rets = np.log(bond_prices / bond_prices.shift(1)).dropna()
-
-common_idx = stock_rets.index.intersection(bond_rets.index)
-stock_aligned = stock_rets.loc[common_idx]
-bond_aligned = bond_rets.loc[common_idx]
-
-corr_window = DEFAULT_PARAMS['corr_window']
-sma_window = DEFAULT_PARAMS['corr_sma_window']
-
-roll_corr = rolling_correlation(stock_aligned, bond_aligned, corr_window)
-smoothed = roll_corr.rolling(sma_window).mean()
-smoothed_corr = smoothed.dropna()
-
-print(f"日期范围: {smoothed_corr.index[0].date()} ~ {smoothed_corr.index[-1].date()}")
-print(f"样本数: {len(smoothed_corr)}")
-print(f"均值: {smoothed_corr.mean():.4f}")
-print(f"标准差: {smoothed_corr.std():.4f}")
-print(f"Min: {smoothed_corr.min():.4f}")
-print(f"Max: {smoothed_corr.max():.4f}")
-
-print("\n分位数:")
-for q in [0.50, 0.75, 0.90, 0.95, 0.99]:
-    print(f"  {q:.0%}: {smoothed_corr.quantile(q):.4f}")
-
-print("\n突破各阈值交易日数:")
-total_days = len(smoothed_corr)
-for thresh in [0.0, 0.05, 0.1, 0.15, 0.2, 0.3]:
-    n = (smoothed_corr > thresh).sum()
-    pct = n / total_days * 100
-    print(f"  >{thresh:+.1f}: {n} 天 ({pct:.1f}%)")
-
-csv_df = pd.DataFrame({'date': smoothed_corr.index, 'smoothed_corr': smoothed_corr.values})
-csv_df.to_csv('output/smoothed_corr_history.csv', index=False)
-print("\nsmoothed_corr 时序已保存到 output/smoothed_corr_history.csv")
-
-# ═══════════════════════════════════════════════════════════
-# 辅助函数：单参数扫描
-# ═══════════════════════════════════════════════════════════
-def scan_param(param_name, values):
+def scan_param(prices: dict[str, pd.DataFrame], param_name, values) -> pd.DataFrame:
     """扫描单个参数，返回 DataFrame。"""
     rows = []
     for val in values:
@@ -89,40 +44,98 @@ def scan_param(param_name, values):
         print(f"  {param_name}={val} → Sharpe={bt['sharpe_ratio']:.3f} CB={cb_days}天")
     return pd.DataFrame(rows)
 
-# ═══════════════════════════════════════════════════════════
-# Step 2: corr_threshold 敏感性扫描
-# ═══════════════════════════════════════════════════════════
-print("\n" + "=" * 60)
-print("Step 2: corr_threshold 敏感性扫描")
-print("=" * 60)
-df_threshold = scan_param('corr_threshold', [-0.1, -0.05, 0.0, 0.05, 0.10, 0.15])
-print("\n", df_threshold.to_string(index=False))
-df_threshold.to_csv('output/corr_threshold_scan.csv', index=False)
 
-# ═══════════════════════════════════════════════════════════
-# Step 3: corr_window 敏感性扫描
-# ═══════════════════════════════════════════════════════════
-print("\n" + "=" * 60)
-print("Step 3: corr_window 敏感性扫描")
-print("=" * 60)
-df_window = scan_param('corr_window', [20, 40, 60, 90, 120])
-print("\n", df_window.to_string(index=False))
-df_window.to_csv('output/corr_window_scan.csv', index=False)
+def main() -> None:
+    os.makedirs('output', exist_ok=True)
 
-# ═══════════════════════════════════════════════════════════
-# Step 4: corr_sma_window 敏感性扫描
-# ═══════════════════════════════════════════════════════════
-print("\n" + "=" * 60)
-print("Step 4: corr_sma_window 敏感性扫描")
-print("=" * 60)
-df_sma = scan_param('corr_sma_window', [1, 3, 5, 10, 20])
-print("\n", df_sma.to_string(index=False))
-df_sma.to_csv('output/corr_sma_window_scan.csv', index=False)
+    # ── 加载数据 ──────────────────────────────────────────
+    prices = load_prices()
+    print(f"数据加载完成: {[(n, len(prices[n])) for n in NAMES]}")
 
-print("\n" + "=" * 60)
-print("全部扫描完成。输出文件:")
-print("  output/smoothed_corr_history.csv")
-print("  output/corr_threshold_scan.csv")
-print("  output/corr_window_scan.csv")
-print("  output/corr_sma_window_scan.csv")
-print("=" * 60)
+    # ═══════════════════════════════════════════════════════
+    # Step 1: smoothed_corr 全期历史分布（独立计算，无需回测）
+    # ═══════════════════════════════════════════════════════
+    print("\n" + "=" * 60)
+    print("Step 1: smoothed_corr 全期历史分布")
+    print("=" * 60)
+
+    stock_prices = {n: prices[n]['close'] for n in ['沪深300', '创业板', '纳指']}
+    bond_prices = prices['国债ETF']['close']
+
+    stock_rets = stock_basket_returns(stock_prices)
+    bond_rets = np.log(bond_prices / bond_prices.shift(1)).dropna()
+
+    common_idx = stock_rets.index.intersection(bond_rets.index)
+    stock_aligned = stock_rets.loc[common_idx]
+    bond_aligned = bond_rets.loc[common_idx]
+
+    corr_window = DEFAULT_PARAMS['corr_window']
+    sma_window = DEFAULT_PARAMS['corr_sma_window']
+
+    roll_corr = rolling_correlation(stock_aligned, bond_aligned, corr_window)
+    smoothed = roll_corr.rolling(sma_window).mean()
+    smoothed_corr = smoothed.dropna()
+
+    print(f"日期范围: {smoothed_corr.index[0].date()} ~ {smoothed_corr.index[-1].date()}")
+    print(f"样本数: {len(smoothed_corr)}")
+    print(f"均值: {smoothed_corr.mean():.4f}")
+    print(f"标准差: {smoothed_corr.std():.4f}")
+    print(f"Min: {smoothed_corr.min():.4f}")
+    print(f"Max: {smoothed_corr.max():.4f}")
+
+    print("\n分位数:")
+    for q in [0.50, 0.75, 0.90, 0.95, 0.99]:
+        print(f"  {q:.0%}: {smoothed_corr.quantile(q):.4f}")
+
+    print("\n突破各阈值交易日数:")
+    total_days = len(smoothed_corr)
+    for thresh in [0.0, 0.05, 0.1, 0.15, 0.2, 0.3]:
+        n = (smoothed_corr > thresh).sum()
+        pct = n / total_days * 100
+        print(f"  >{thresh:+.1f}: {n} 天 ({pct:.1f}%)")
+
+    csv_df = pd.DataFrame({'date': smoothed_corr.index, 'smoothed_corr': smoothed_corr.values})
+    csv_df.to_csv('output/smoothed_corr_history.csv', index=False)
+    print("\nsmoothed_corr 时序已保存到 output/smoothed_corr_history.csv")
+
+    # ═══════════════════════════════════════════════════════
+    # Step 2: corr_threshold 敏感性扫描
+    # ═══════════════════════════════════════════════════════
+    print("\n" + "=" * 60)
+    print("Step 2: corr_threshold 敏感性扫描")
+    print("=" * 60)
+    df_threshold = scan_param(prices, 'corr_threshold', [-0.1, -0.05, 0.0, 0.05, 0.10, 0.15])
+    print("\n", df_threshold.to_string(index=False))
+    df_threshold.to_csv('output/corr_threshold_scan.csv', index=False)
+
+    # ═══════════════════════════════════════════════════════
+    # Step 3: corr_window 敏感性扫描
+    # ═══════════════════════════════════════════════════════
+    print("\n" + "=" * 60)
+    print("Step 3: corr_window 敏感性扫描")
+    print("=" * 60)
+    df_window = scan_param(prices, 'corr_window', [20, 40, 60, 90, 120])
+    print("\n", df_window.to_string(index=False))
+    df_window.to_csv('output/corr_window_scan.csv', index=False)
+
+    # ═══════════════════════════════════════════════════════
+    # Step 4: corr_sma_window 敏感性扫描
+    # ═══════════════════════════════════════════════════════
+    print("\n" + "=" * 60)
+    print("Step 4: corr_sma_window 敏感性扫描")
+    print("=" * 60)
+    df_sma = scan_param(prices, 'corr_sma_window', [1, 3, 5, 10, 20])
+    print("\n", df_sma.to_string(index=False))
+    df_sma.to_csv('output/corr_sma_window_scan.csv', index=False)
+
+    print("\n" + "=" * 60)
+    print("全部扫描完成。输出文件:")
+    print("  output/smoothed_corr_history.csv")
+    print("  output/corr_threshold_scan.csv")
+    print("  output/corr_window_scan.csv")
+    print("  output/corr_sma_window_scan.csv")
+    print("=" * 60)
+
+
+if __name__ == '__main__':
+    main()
