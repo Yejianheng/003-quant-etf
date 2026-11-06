@@ -1,3 +1,4 @@
+# [2026-11-06] 新增：断层回放必须消费回测引擎熔断/乘数状态 — 回归「熔断持续期误报持仓 + 幽灵买卖」
 # [2026-09-11] 新增：操作指令基线测试 — 回归 v221「永远无需调仓」bug
 # [2026-06-25] 新增：信号间隔回放测试 — 5 场景
 """测试 _replay_gap — 信号间隔自动补全"""
@@ -578,3 +579,225 @@ class TestHeldNames:
         from scripts.daily_signal import held_names
 
         assert held_names(None) == []
+
+
+# [2026-11-06] 新增：熔断持续期的断层回放回归
+# 回归 #2026-11-06 报告事故：10-23 → 11-06 断层回放把趋势翻转当买卖，
+# 报「持有国债ETF、纳指」并输出「全部清仓（熔断触发）」——实际自 7-03 起已 100% 逆回购。
+
+def _make_records(prices, cb=True, multiplier=0.0, active=None):
+    """构造回测引擎 records_df 的最小快照（索引与 prices 对齐）。"""
+    idx = prices["沪深300"].index
+    if active is None:
+        active = ETF_ORDER
+    return pd.DataFrame({
+        "nav": np.linspace(1.0, 1.2, len(idx)),
+        "circuit_breaker_triggered": cb,
+        "final_multiplier": multiplier,
+        "defense_active": ";".join(active),
+        "defense_count": len(active),
+    }, index=idx)
+
+
+class TestReplayUsesBacktestStatus:
+    """_replay_gap(records_df=...)：熔断/乘数状态必须来自回测引擎，不得只看趋势"""
+
+    def _gap_state(self, prices):
+        dates = prices["沪深300"].index
+        return {
+            "last_date": str(dates[64].date()),
+            "last_active": list(ETF_ORDER),
+            "last_cb_triggered": True,
+            "last_final_multiplier": 0.0,
+            "last_offense_weights": {},
+            "portfolio_values": [],
+        }
+
+    def test_replay_marks_repo_when_cb_active(self):
+        """熔断持续 + 趋势有翻转 → held 全空、changes 为空（不得产生幽灵买卖）"""
+        from scripts.daily_signal import _replay_gap
+
+        prices = _make_prices_gold_downtrend(n=150)
+        state = self._gap_state(prices)
+        records = _make_records(prices, cb=True, multiplier=0.0)
+
+        result = _replay_gap(prices, state, records_df=records)
+
+        assert result["gap_trading_days"] > 0
+        assert result["changes"] == [], f"熔断持续期不应有买卖事件，实际：{result['changes']}"
+        assert all(entry["held"] == [] for entry in result["daily_active"]), (
+            "熔断期间实际持仓必须为空"
+        )
+        assert all(entry["circuit_breaker"] is True for entry in result["daily_active"])
+
+    def test_replay_uses_records_active_list(self):
+        """趋势回放与引擎信号不一致时，以回测引擎 defense_active 为准"""
+        from scripts.daily_signal import _replay_gap
+
+        prices = _make_prices_uptrend(n=150)
+        state = self._gap_state(prices)
+        state["last_cb_triggered"] = False
+        state["last_final_multiplier"] = 1.0
+        records = _make_records(prices, cb=False, multiplier=1.0, active=["国债ETF"])
+
+        result = _replay_gap(prices, state, records_df=records)
+
+        assert result["daily_active"], "应有回放日"
+        assert all(entry["active"] == ["国债ETF"] for entry in result["daily_active"])
+
+    def test_changes_on_cb_release_reason_break(self):
+        """熔断解除当日 → 事件 reason='熔断'，其余趋势变化 reason='趋势'"""
+        from scripts.daily_signal import _replay_gap
+
+        prices = _make_prices_uptrend(n=150)
+        state = self._gap_state(prices)  # 起始熔断
+        dates = prices["沪深300"].index
+
+        # 回放首日为熔断中，随后解除
+        records = _make_records(prices, cb=False, multiplier=1.0)
+        record_cb = records["circuit_breaker_triggered"].copy()
+        gap_dates = [d for d in dates if d > pd.Timestamp(state["last_date"])]
+        record_cb.loc[gap_dates[0]] = True
+        records["circuit_breaker_triggered"] = record_cb
+
+        result = _replay_gap(prices, state, records_df=records)
+
+        add_events = [c for c in result["changes"] if c["event"] == "added"]
+        assert add_events, f"熔断解除应产生买入事件，实际：{result['changes']}"
+        assert all(c.get("reason") == "熔断" for c in add_events), add_events
+
+
+class TestReplaySegmentsRespectCircuitBreaker:
+    """_format_replay_segments：熔断持续期只能报空仓/熔断，不得出现买入/卖出"""
+
+    def test_segments_show_repo_not_phantom_trades(self):
+        from scripts.daily_signal import _replay_gap, _format_replay_segments
+
+        prices = _make_prices_gold_downtrend(n=150)
+        dates = prices["沪深300"].index
+        state = {
+            "last_date": str(dates[64].date()),
+            "last_active": list(ETF_ORDER),
+            "last_cb_triggered": True,
+            "last_final_multiplier": 0.0,
+            "last_offense_weights": {},
+            "portfolio_values": [],
+        }
+        result = _replay_gap(prices, state,
+                             records_df=_make_records(prices, cb=True, multiplier=0.0))
+
+        text = "\n".join(_format_replay_segments(result))
+
+        assert "买入" not in text and "卖出" not in text, (
+            f"熔断持续期不得出现幽灵买卖，实际：\n{text}"
+        )
+        assert "空仓" in text and "无变化" in text, text
+
+
+class TestBaselineRespectsCircuitBreaker:
+    """_prev_active_signal：断层回放基线必须保留熔断标记，否则当前持有/操作指令全错"""
+
+    @staticmethod
+    def _replay_under_cb():
+        return {
+            "daily_active": [
+                {"date": "2025-06-23", "active": ["纳指", "国债ETF"], "held": [],
+                 "circuit_breaker": True, "final_multiplier": 0.0},
+                {"date": "2025-06-24", "active": ["国债ETF"], "held": [],
+                 "circuit_breaker": True, "final_multiplier": 0.0},
+            ]
+        }
+
+    def test_baseline_carries_cb_triggered(self):
+        from scripts.daily_signal import _prev_active_signal, held_names
+
+        baseline = _prev_active_signal(self._replay_under_cb(),
+                                       _baseline_signal(["纳指", "国债ETF"]))
+
+        assert baseline["circuit_breaker"]["triggered"] is True, (
+            "断层回放基线必须保留熔断状态，不得硬编码 False"
+        )
+        assert baseline["defense"]["active"] == []
+        assert held_names(baseline) == [], "熔断持续时当前持有必须为空仓"
+
+    def test_compare_reports_cb_continuation_after_gap(self):
+        from scripts.daily_signal import _prev_active_signal, _compare_signals
+
+        baseline = _prev_active_signal(self._replay_under_cb(), None)
+        current = {
+            "defense": {"active": ["国债ETF"]},
+            "offense": {"target_weights": {}},
+            "circuit_breaker": {"triggered": True},
+            "execution": {"final_multiplier": 0.0},
+        }
+
+        actions = _compare_signals(current, baseline)
+
+        assert actions == ["无需调仓（熔断持续）"], actions
+
+
+class TestCheckPositionCbContinuation:
+    """集成：断层期间熔断持续 → 当前持有空仓 + 无需调仓，不得输出幽灵买卖"""
+
+    @staticmethod
+    def _signal(date_str, cb=True, multiplier=0.0):
+        return {
+            "date": date_str,
+            "defense": {
+                "trend_strengths": {"国债ETF": 0.2},
+                "active": ["国债ETF"],
+                "target_weights": {},
+                "scaling_factor": 1.0,
+                "predicted_vol": 0.05,
+            },
+            "offense": {"rankings": [], "target_weights": {}},
+            "circuit_breaker": {"triggered": cb, "smoothed_corr": 0.30},
+            "drawdown_stop": {"level": "normal", "position_multiplier": 1.0,
+                              "drawdown": -0.03},
+            "execution": {"final_multiplier": multiplier, "funds_to_repo": cb},
+        }
+
+    def test_gap_during_cb_reports_repo_and_no_action(self, tmp_path, capsys):
+        from src.etf_universe import ETF_UNIVERSE
+        from scripts.daily_signal import _save_state
+
+        prices = _make_prices_gold_downtrend(n=150)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        for name, df in prices.items():
+            df.to_parquet(data_dir / f"{ETF_UNIVERSE[name]}.parquet")
+
+        dates = prices["沪深300"].index
+        _save_state(str(data_dir), {
+            "last_date": str(dates[-4].date()),
+            "last_active": list(ETF_ORDER),
+            "last_cb_triggered": True,
+            "last_final_multiplier": 0.0,
+            "last_offense_weights": {},
+            "portfolio_values": [],
+        })
+
+        signal = self._signal(str(dates[-1].date()))
+        records = _make_records(prices, cb=True, multiplier=0.0)
+
+        from scripts import check_position
+        with (
+            patch("scripts.check_position.check_freshness", return_value=[]),
+            patch("scripts.check_position.update_single_etf",
+                  MagicMock(return_value={"ok": True, "needs_verify": False})),
+            patch("scripts.check_position.DATA_DIR", str(data_dir)),
+            patch("scripts.check_position.OUTPUT_PATH", str(tmp_path / "nav.html")),
+            patch("scripts.check_position.update_chart", MagicMock()),
+            patch("scripts.check_position.generate_signal", return_value=signal),
+            patch("scripts.daily_signal.run_backtest",
+                  return_value={"records_df": records}),
+        ):
+            check_position.main()
+
+        out = capsys.readouterr().out
+
+        assert "持有：空仓（100% 逆回购）" in out, out
+        assert "无需调仓（熔断持续）" in out, out
+        assert "买入" not in out and "卖出" not in out, (
+            f"熔断持续期不得出现幽灵买卖，实际：\n{out}"
+        )

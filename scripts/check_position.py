@@ -1,3 +1,4 @@
+# [2026-11-06] 修复：间隔回放接入回测引擎逐日熔断/乘数状态，熔断持续期不再误报持仓与买卖
 # [2026-10-23] 修改：组合净值改用回测引擎真实净值，回撤止损不再基于五 ETF 等权伪净值
 # [2026-10-15] 修复：「当前持有」改用 held_names，不再用 defense.active 冒充持仓
 # [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」（v221）
@@ -24,7 +25,7 @@ from scripts.daily_signal import (
     _load_state,
     _previous_signal_from_state,
     _prev_active_signal,
-    _build_portfolio_value,
+    _build_backtest,
     _compare_signals,
     _replay_gap,
     _format_replay_segments,
@@ -89,13 +90,13 @@ def main() -> None:
         print("错误：data/ 目录无 parquet 文件", file=sys.stderr)
         sys.exit(1)
 
-    # 3. 间隔回放
-    state = _load_state(data_dir)
-    replay_result = _replay_gap(prices, state)
-
-    # 4. 构造组合净值（回测引擎真实净值）+ 生成信号
-    portfolio_value = _build_portfolio_value(prices)
+    # 3. 构造组合净值（回测引擎真实净值）+ 生成信号
+    portfolio_value, records = _build_backtest(prices)
     signal = generate_signal(prices, portfolio_value)
+
+    # 4. 间隔回放（以回测引擎逐日熔断/乘数状态为准）
+    state = _load_state(data_dir)
+    replay_result = _replay_gap(prices, state, records_df=records)
 
     # 5. 比较上一次信号（有回放则用回放最后一天对比）
     prev_signal = None

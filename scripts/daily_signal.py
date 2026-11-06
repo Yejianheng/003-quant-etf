@@ -1,3 +1,4 @@
+# [2026-11-06] 修复：断层回放改消费回测引擎熔断/乘数状态，杜绝熔断持续期幽灵买卖与虚假持仓
 # [2026-10-23] 修复：组合净值改用回测引擎真实策略净值（T+1 开盘执行），废弃五 ETF 等权伪净值
 # [2026-09-11] 修复：操作指令基线误取当日信号致恒输出「无需调仓」，改取上一交易日信号（v221）
 # [2026-06-25] 新增：间隔回放 _replay_gap + 期间回顾报告段
@@ -53,17 +54,31 @@ def load_prices(data_dir: str = "data") -> dict[str, pd.DataFrame]:
 
 # ---- 间隔回放 ----
 
+def _parse_active_field(value) -> list[str]:
+    """解析回测记录 defense_active 字段（分号分隔的中文名）。"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return []
+    return [name.strip() for name in str(value).split(";") if name.strip()]
+
+
 def _replay_gap(prices: dict[str, pd.DataFrame],
-                state: dict | None) -> dict:
-    """逐日回放 state.last_date 到最新数据日之间的趋势信号。
+                state: dict | None,
+                records_df: pd.DataFrame | None = None) -> dict:
+    """逐日回放 state.last_date 到最新数据日之间的真实信号。
+
+    传入 records_df（回测引擎逐日记录）时，持仓以引擎的
+    circuit_breaker_triggered / final_multiplier / defense_active 为准 ——
+    熔断或乘数归零期间持仓为空，趋势翻转不得被当成买卖。
+    不传 records_df 时退回纯趋势回放（仅保留给旧测试与离线诊断）。
 
     返回:
     {
         "gap_trading_days": int,
         "last_date": str,
         "today": str,
-        "daily_active": [{date, active}],
-        "changes": [{date, event, etf}],
+        "start_held": [etf],          # 断层起点实际持仓
+        "daily_active": [{date, active, held, circuit_breaker, final_multiplier}],
+        "changes": [{date, event, etf, reason}],   # reason: 熔断 / 趋势
     }
     无 state 或 gap=0 时 gap_trading_days=0, changes=[]。
     """
@@ -103,107 +118,197 @@ def _replay_gap(prices: dict[str, pd.DataFrame],
     trend_window = DEFAULT_PARAMS.get("trend_window", 40)
     daily_active = []
     changes = []
-    prev_active = set(state.get("last_active", []))
+
+    # 回测引擎快照（按日期索引）——有 records 时以其为准，趋势仅作缺失兜底
+    status_lookup = None
+    if records_df is not None and len(records_df) > 0:
+        status_lookup = {}
+        for idx, row in records_df.iterrows():
+            status_lookup[str(pd.Timestamp(idx).date())] = {
+                "active": _parse_active_field(row.get("defense_active", "")),
+                "cb": bool(row.get("circuit_breaker_triggered", False)),
+                "multiplier": float(row.get("final_multiplier", 1.0)),
+            }
+
+    if status_lookup is not None:
+        start_cb = bool(state.get("last_cb_triggered", False))
+        start_mult = float(state.get("last_final_multiplier", 1.0))
+        prev_cb = start_cb
+        prev_held = (set() if (start_cb or start_mult == 0)
+                     else set(state.get("last_active", [])))
+    else:
+        prev_cb = False
+        prev_held = set(state.get("last_active", []))
+    start_held = sorted(prev_held)
 
     for d in gap_dates:
-        active = set()
-        for name, df in prices.items():
-            subset = df[df.index <= d]
-            if len(subset) < trend_window:
-                continue
-            ts = trend_strength(subset["close"], window=trend_window)
-            if ts > 0:
-                active.add(name)
+        day_key = str(d.date())
 
-        daily_active.append({"date": str(d.date()), "active": list(active)})
+        if status_lookup is not None:
+            snap = status_lookup.get(day_key)
+            if snap is not None:
+                active = set(snap["active"])
+                cb, multiplier = snap["cb"], snap["multiplier"]
+            else:
+                # 引擎记录缺失 → 退回趋势计算，按未熔断处理
+                active = set()
+                for name, df in prices.items():
+                    subset = df[df.index <= d]
+                    if len(subset) < trend_window:
+                        continue
+                    if trend_strength(subset["close"], window=trend_window) > 0:
+                        active.add(name)
+                cb, multiplier = False, 1.0
 
-        removed = prev_active - active
-        added = active - prev_active
+            held = set() if (cb or multiplier == 0) else set(active)
+            daily_active.append({
+                "date": day_key,
+                "active": sorted(active),
+                "held": sorted(held),
+                "circuit_breaker": cb,
+                "final_multiplier": multiplier,
+            })
+            reason = "熔断" if cb != prev_cb else "趋势"
+            removed, added = prev_held - held, held - prev_held
+            prev_held, prev_cb = held, cb
+        else:
+            active = set()
+            for name, df in prices.items():
+                subset = df[df.index <= d]
+                if len(subset) < trend_window:
+                    continue
+                ts = trend_strength(subset["close"], window=trend_window)
+                if ts > 0:
+                    active.add(name)
+
+            daily_active.append({"date": day_key, "active": list(active)})
+            reason = "趋势"
+            removed, added = prev_held - active, active - prev_held
+            prev_held = active
+
         for etf in sorted(removed):
-            changes.append({"date": str(d.date()), "event": "removed", "etf": etf})
+            changes.append({"date": day_key, "event": "removed",
+                            "etf": etf, "reason": reason})
         for etf in sorted(added):
-            changes.append({"date": str(d.date()), "event": "added", "etf": etf})
-
-        prev_active = active
+            changes.append({"date": day_key, "event": "added",
+                            "etf": etf, "reason": reason})
 
     return {
         "gap_trading_days": len(gap_dates),
         "last_date": last_date_str,
         "today": str(today.date()),
+        "start_held": start_held,
         "daily_active": daily_active,
         "changes": changes,
     }
 
 
+def _entry_held(entry: dict) -> set:
+    """取回放日的实际持仓：新格式用 held，旧格式退回 active。"""
+    if "held" in entry:
+        return set(entry["held"])
+    return set(entry.get("active", []))
+
+
+def _entry_is_repo(entry: dict | None) -> bool:
+    """该回放日是否处于熔断空仓状态。"""
+    return bool(entry and entry.get("circuit_breaker", False))
+
+
+def _format_pool_line(start: str, end: str, held: set, repo: bool) -> str:
+    """格式化一段无变化区间。"""
+    if not held and repo:
+        return f"  {start} → {end}  空仓（熔断中），无变化"
+    names_str = "、".join(sorted(held)) if held else "空仓"
+    return f"  {start} → {end}  {len(held)} 只（{names_str}），无变化"
+
+
 def _format_replay_segments(replay: dict) -> list[str]:
-    """将 replay result 格式化为人类可读的"期间回顾"行列表。"""
+    """将 replay result 格式化为人类可读的"期间回顾"行列表。
+
+    持仓口径 = held（已含熔断/乘数折算）。熔断持续期只能报空仓，不得出现
+    买入/卖出 —— 趋势翻转在熔断期间不产生任何交易。
+    """
     if not replay or replay["gap_trading_days"] == 0:
         return []
 
-    lines = []
+    daily = replay.get("daily_active") or []
     changes = replay["changes"]
 
     if not changes:
-        # 全程无变化 — 从 daily_active 或 state last_active 获取持仓
-        active_set = set()
-        if replay["daily_active"]:
-            active_set = set(replay["daily_active"][0]["active"])
-        n_etfs = len(active_set)
-        names_str = "、".join(sorted(active_set)) if active_set else "空仓"
-        lines.append(
-            f"  {replay['last_date']} → {replay['today']}  "
-            f"持续持有 {n_etfs} 只（{names_str}），无变化"
-        )
+        if daily:
+            held, repo = _entry_held(daily[0]), _entry_is_repo(daily[0])
+        else:
+            held, repo = set(), False
+        return [_format_pool_line(replay["last_date"], replay["today"], held, repo)]
+
+    lines = []
+    seg_start = replay["last_date"]
+    if replay.get("start_held") is not None:
+        last_held = set(replay["start_held"])
+    elif daily:
+        last_held = _entry_held(daily[0])
     else:
-        # 分段：从 last_date 到第一个 change 前一天
-        # 用 daily_active 来确定每段的 active 集合
-        seg_start = replay["last_date"]
-        current_active = set()
-        last_active_set = set()
+        last_held = set()
+    last_repo = _entry_is_repo(daily[0]) if daily else False
 
-        # 先确定初始 active（从 state 或 daily_active[0]）
-        if replay["daily_active"]:
-            last_active_set = set(replay["daily_active"][0]["active"])
-        elif "last_active" in replay and replay["last_active"]:
-            last_active_set = set(replay["last_active"])
+    for i, day in enumerate(daily):
+        day_changes = [c for c in changes if c["date"] == day["date"]]
+        if not day_changes:
+            continue
 
-        change_idx = 0
-        for i, day in enumerate(replay["daily_active"]):
-            day_active = set(day["active"])
-            # 检查这一天是否有变化
-            day_changes = [c for c in changes if c["date"] == day["date"]]
+        day_held = _entry_held(day)
+        day_repo = _entry_is_repo(day)
 
-            if day_changes:
-                # 变化前的稳定段
-                if day_active != last_active_set or i == 0:
-                    n_etfs = len(last_active_set)
-                    names_str = "、".join(sorted(last_active_set)) if last_active_set else "空仓"
-                    lines.append(
-                        f"  {seg_start} → {day['date']}  "
-                        f"{n_etfs} 只（{names_str}），无变化"
-                    )
-                # 变化事件
-                for c in day_changes:
-                    verb = "买入" if c["event"] == "added" else "卖出"
-                    lines.append(f"  {day['date']}  {verb} {c['etf']}（趋势转{'正' if c['event'] == 'added' else '负'}）")
-                seg_start = day["date"]
-                last_active_set = day_active
+        # 变化前的稳定段
+        if day_held != last_held or i == 0:
+            lines.append(_format_pool_line(seg_start, day["date"], last_held, last_repo))
 
-        # 最后一段：从末次变化到今日
-        if replay["daily_active"]:
-            final_active = set(replay["daily_active"][-1]["active"])
-            n_etfs = len(final_active)
-            names_str = "、".join(sorted(final_active)) if final_active else "空仓"
-            if seg_start != replay["today"]:
-                lines.append(
-                    f"  {seg_start} → {replay['today']}  "
-                    f"{n_etfs} 只（{names_str}），无变化"
-                )
+        cb_events = [c for c in day_changes if c.get("reason") == "熔断"]
+        trend_events = [c for c in day_changes if c.get("reason") != "熔断"]
+
+        if cb_events:
+            sold = [c for c in cb_events if c["event"] == "removed"]
+            bought = [c for c in cb_events if c["event"] == "added"]
+            if sold:
+                lines.append(f"  {day['date']}  全部清仓（熔断触发）")
+            if bought:
+                names = "、".join(sorted(c["etf"] for c in bought))
+                lines.append(f"  {day['date']}  熔断解除，买入 {names}")
+
+        for c in trend_events:
+            verb = "买入" if c["event"] == "added" else "卖出"
+            lines.append(f"  {day['date']}  {verb} {c['etf']}（趋势转{'正' if c['event'] == 'added' else '负'}）")
+
+        seg_start = day["date"]
+        last_held = day_held
+        last_repo = day_repo
+
+    # 最后一段：从末次变化到今日
+    if daily and seg_start != replay["today"]:
+        final = daily[-1]
+        lines.append(_format_pool_line(seg_start, replay["today"],
+                                       _entry_held(final), _entry_is_repo(final)))
 
     return lines
 
 
 # ---- 报告格式化 ----
+
+def _effective_holdings(sig: dict | None) -> set:
+    """信号对应的实际持仓名单 —— 熔断或仓位乘数归零时为空仓。
+
+    趋势 active 只是幸存名单，不等于持仓（CLAUDE.md 已记载的语义陷阱）。
+    """
+    if not sig:
+        return set()
+    if sig.get("circuit_breaker", {}).get("triggered"):
+        return set()
+    execution = sig.get("execution") or {}
+    if execution.get("final_multiplier", 1.0) == 0:
+        return set()
+    return set(sig.get("defense", {}).get("active", []))
+
 
 def _compare_signals(current: dict, previous: dict | None) -> list[str]:
     """比较当前与上一交易日信号，返回操作指令列表。"""
@@ -221,8 +326,8 @@ def _compare_signals(current: dict, previous: dict | None) -> list[str]:
         return ["全部清仓（熔断触发）"]
 
     actions = []
-    prev_active = set(previous["defense"]["active"])
-    curr_active = set(current["defense"]["active"])
+    prev_active = _effective_holdings(previous)
+    curr_active = _effective_holdings(current)
 
     removed = prev_active - curr_active
     added = curr_active - prev_active
@@ -332,6 +437,19 @@ def _save_state(state_dir: str, state: dict) -> None:
         json.dump(state, f, ensure_ascii=False, indent=2, default=str)
 
 
+def _build_backtest(prices: dict[str, pd.DataFrame],
+                    state: dict | None = None) -> tuple[pd.Series, pd.DataFrame]:
+    """跑回测引擎（T+1 开盘执行），返回 (归一化净值, 逐日记录)。
+
+    [2026-11-06] 新增：把 records_df 一并返回，供 _replay_gap 读取逐日
+    熔断/仓位乘数状态，避免断层回放只看趋势产生的幽灵交易。
+    """
+    result = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
+    records = result["records_df"]
+    nav = pd.Series(records["nav"].values, index=records.index, name="nav")
+    return nav / nav.iloc[0], records  # 归一到 1.0 起，回撤比例不变
+
+
 def _build_portfolio_value(prices: dict[str, pd.DataFrame],
                            state: dict | None = None) -> pd.Series:
     """构造组合净值序列 — 回测引擎（T+1 开盘执行）的真实策略净值。
@@ -343,10 +461,8 @@ def _build_portfolio_value(prices: dict[str, pd.DataFrame],
     state 参数仅为兼容旧调用保留，不参与计算：旧 state 中的 portfolio_values
     是同一等权伪净值，合并会再次污染回撤止损。
     """
-    result = run_backtest(prices, params=DEFAULT_PARAMS, execution_lag=1)
-    records = result["records_df"]
-    nav = pd.Series(records["nav"].values, index=records.index, name="nav")
-    return nav / nav.iloc[0]  # 归一到 1.0 起，回撤比例不变
+    nav, _ = _build_backtest(prices)
+    return nav
 
 
 def _signal_to_state(signal: dict, portfolio_values: pd.Series) -> dict:
@@ -405,11 +521,19 @@ def _prev_active_signal(replay_result: dict | None,
     """
     daily_active = (replay_result or {}).get("daily_active") or []
     if len(daily_active) >= 2:
-        return {
-            "defense": {"active": list(daily_active[-2]["active"])},
+        entry = daily_active[-2]
+        # [2026-11-06] 修复：此前硬编码 circuit_breaker.triggered=False，
+        # 断层回放时丢弃 state 中真实的熔断状态，导致 held_names 用趋势名单
+        # 冒充持仓、_compare_signals 重复报「全部清仓」。
+        active = entry["held"] if "held" in entry else entry.get("active", [])
+        baseline = {
+            "defense": {"active": list(active)},
             "offense": {"target_weights": {}},
-            "circuit_breaker": {"triggered": False},
+            "circuit_breaker": {"triggered": bool(entry.get("circuit_breaker", False))},
         }
+        if "final_multiplier" in entry:
+            baseline["execution"] = {"final_multiplier": float(entry["final_multiplier"])}
+        return baseline
     return fallback
 
 
@@ -457,10 +581,10 @@ def main(data_dir: str = "data", state_dir: str = "data") -> str:
 
     # 4. 构造组合净值（回测引擎真实净值，不读 state 旧伪净值）
     state = _load_state(state_dir)
-    portfolio_value = _build_portfolio_value(prices)
+    portfolio_value, records = _build_backtest(prices)
 
-    # 5. 间隔回放
-    replay_result = _replay_gap(prices, state)
+    # 5. 间隔回放（以回测引擎逐日熔断/乘数状态为准）
+    replay_result = _replay_gap(prices, state, records_df=records)
 
     # 6. 算信号
     signal = generate_signal(prices, portfolio_value)
