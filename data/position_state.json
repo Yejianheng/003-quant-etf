@@ -1,11 +1,11 @@
 {
-  "last_date": "2026-11-06",
+  "last_date": "2026-11-12",
   "last_active": [
     "国债ETF"
   ],
   "last_offense_weights": {},
-  "last_cb_triggered": true,
-  "last_final_multiplier": 0.0,
+  "last_cb_triggered": false,
+  "last_final_multiplier": 1.0,
   "portfolio_values": [
     {
       "date": "2014-01-27",
@@ -12418,6 +12418,22 @@
     {
       "date": "2026-11-06",
       "value": 4.3174835157261215
+    },
+    {
+      "date": "2026-11-09",
+      "value": 4.3178261731480045
+    },
+    {
+      "date": "2026-11-10",
+      "value": 4.318168857764921
+    },
+    {
+      "date": "2026-11-11",
+      "value": 4.318511569579029
+    },
+    {
+      "date": "2026-11-12",
+      "value": 4.318854308592488
     }
   ]
 }

@@ -16,3 +16,5 @@ logs/
 output/*.csv
 output/*.html
 nav_2026.html
+# [2026-11-13] 新增：角色标记为会话瞬态文件（Step 0 写入，Stop hook 清除），不入库
+.claude/role.json
